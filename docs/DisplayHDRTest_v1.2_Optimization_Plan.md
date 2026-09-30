@@ -24,7 +24,7 @@
 - API 指令、錯誤或連線中斷不得造成原有測試流程卡住、當機，或影響人工鍵盤操作。
 - API 與既有操作共用狀態時，需確保操作仍在安全的程式執行緒中處理，且不改變既有畫面更新流程。
 
-## 現況
+## 原版狀態（實作前）
 
 - `6` 會進入 `ColorPatches` 測試，但不會重設 `m_currentColor`。
 - `ColorPatches` 是 8% 色塊測試；程式另有 `ColorPatchesFull` 全螢幕色塊測試。
@@ -123,4 +123,14 @@
 - `DisplayHDRTest-v1.2-source/DisplayHDRComplianceTests.vcxproj`
 - 新增 Named Pipe／API 實作檔（檔名待定）
 
-目前只記錄需求，尚未修改原始碼。
+## 實作狀態（2026-09-30）
+
+- 已新增本機 Named Pipe JSON API，以 `--api` 啟用；未啟用時保留原有操作。
+- 支援全部 47 個測試畫面、25 個持續設定的明確指定與查詢，包含 8%／全畫面 RGBW 選擇、字幕、說明文字及原有數值控制。
+- 已提供測試標題、適用設定、原始控制值／換算值、請求識別值、狀態版本、畫格、提交狀態、倒數、顯示資訊及 metadata 查詢。
+- 先驗證整份請求，再於主執行緒配合原有初始化／Update／Render 套用；原有鍵盤及圖樣函式保留。
+- 已提供 Python 標準函式庫客戶端、建置工具與自動化驗證。
+- 12 項測試通過；離屏 HDR／SDR 共 320 組畫面及 metadata，比對原版、API 關閉版、API 啟用版一致。
+- 實機驗收尚未完成：目前環境原版與修改版均在 DirectX 初始化出現 `DXGI_ERROR_UNSUPPORTED (0x887A0004)`。實際 HDR 輸出、全螢幕切換、裝置重建、效能／動態時序及量測設備整合仍需後續確認。
+
+使用方式與完整通訊契約見 [API 文件](Automation_API.md)；驗證證據與未驗證範圍見 [驗證報告](Automation_Verification.md)。

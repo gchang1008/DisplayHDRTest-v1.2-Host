@@ -11,6 +11,8 @@
 
 #include "pch.h"
 #include "Game.h"
+#include "AutomationPipe.h"
+#include <shellapi.h>
 
 using namespace DirectX;
 
@@ -41,7 +43,17 @@ extern "C"
 int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _In_ LPWSTR lpCmdLine, _In_ int nCmdShow)
 {
     UNREFERENCED_PARAMETER(hPrevInstance);
+    bool enableApi = false;
+    int argumentCount = 0;
+    LPWSTR* arguments = CommandLineToArgvW(GetCommandLineW(), &argumentCount);
+    if (arguments)
+    {
+        for (int i = 1; i < argumentCount; ++i)
+            if (wcscmp(arguments[i], L"--api") == 0) enableApi = true;
+        LocalFree(arguments);
+    }
     UNREFERENCED_PARAMETER(lpCmdLine);
+    std::unique_ptr<AutomationPipe> automation;
 
     if (!XMVerifyCPUSupport())
         return 1;
@@ -140,6 +152,14 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
         ToggleFullscreen(hwnd);
 #endif
 
+        if (enableApi)
+        {
+            g_game->ConfigureAutomation(hwnd,
+                [hwnd](bool value) { if (g_fullscreen != value) ToggleFullscreen(hwnd); },
+                []() { return g_fullscreen; });
+            automation = std::make_unique<AutomationPipe>();
+        }
+
         // We never want to see the cursor in this app.
         CURSORINFO ci = {};
         ci.cbSize = sizeof(CURSORINFO);
@@ -165,9 +185,11 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
         else
         {
             g_game->Tick();
+            if (automation) automation->Poll(*g_game);
         }
     }
 
+    automation.reset();
     g_game.reset();
 
     CoUninitialize();

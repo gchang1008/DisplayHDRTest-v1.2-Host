@@ -385,10 +385,11 @@ void Game::Tick()
 {
     m_timer.Tick([&]()
     {
+        if (m_automationPending) BeginAutomationUpdate();
         Update(m_timer);
     });
 
-
+    if (m_automationBegun) ApplyAutomationSettings();
     Render();
 }
 
@@ -5443,6 +5444,7 @@ void Game::Render()
     }
 
     m_deviceResources->PIXBeginEvent(L"Render");
+    if (m_automationWindow) m_automationRenderedText.clear();
 
     Clear();
 
@@ -5613,6 +5615,7 @@ void Game::Render()
 
     // Show the new frame.
     m_deviceResources->Present();
+    if (m_automationWindow) TrackAutomationPresentation();
 }
 
 // Helper method to clear the back buffers.
@@ -5641,6 +5644,9 @@ void Game::Clear()
 // definition of D2D1_RECT_F
 void Game::RenderText(ID2D1DeviceContext2* ctx, IDWriteTextFormat* fmt, std::wstring text, D2D1_RECT_F textPos, bool useBlackText /* = false */)
 {
+    if (m_automationWindow && !text.empty()
+        && (m_automationRenderedText.empty() || (textPos.left == m_testTitleRect.left && textPos.top == m_testTitleRect.top)))
+        m_automationRenderedText = text;
     auto fact = m_deviceResources->GetDWriteFactory();
     ComPtr<IDWriteTextLayout> layout;
     DX::ThrowIfFailed(fact->CreateTextLayout(

@@ -15,6 +15,8 @@
 #include "StepTimer.h"
 #include "Basicmath.h"
 #include <map>
+#include <functional>
+#include <winrt/Windows.Data.Json.h>
 
 #include <winrt\Windows.Devices.Display.h>
 #include <winrt\Windows.Devices.Display.Core.h>
@@ -180,7 +182,38 @@ public:
 	void PrintMetadata(   ID2D1DeviceContext2* ctx, bool blackText = false );
     void PrintTestingTier(ID2D1DeviceContext2* ctx, bool blackText = false);
 
+    // Local automation API. All calls run on the rendering thread.
+    void ConfigureAutomation(HWND window, std::function<void(bool)> setFullscreen, std::function<bool()> getFullscreen);
+    winrt::Windows::Data::Json::JsonObject AutomationCatalog();
+    winrt::Windows::Data::Json::JsonObject AutomationState();
+    void QueueAutomationState(winrt::Windows::Data::Json::JsonObject const& request, std::wstring const& id);
+    bool AutomationPending() const { return m_automationPending != nullptr; }
+
 private:
+    winrt::Windows::Data::Json::JsonObject AutomationSettings();
+    void BeginAutomationUpdate();
+    void ApplyAutomationSettings();
+    void TrackAutomationPresentation();
+    int AutomationProfileMaximum() const;
+    struct AutomationFloatSetting { wchar_t const* key; float Game::* member; double low, high; };
+    static std::array<AutomationFloatSetting, 10> const& AutomationFloats();
+    winrt::Windows::Data::Json::JsonArray AutomationApplicableSettings(TestPattern test) const;
+    HWND m_automationWindow = nullptr;
+    std::wstring m_automationRenderedText;
+    winrt::Windows::Data::Json::JsonObject m_automationDefaults{ nullptr };
+    std::function<void(bool)> m_automationSetFullscreen;
+    std::function<bool()> m_automationFullscreen;
+    winrt::Windows::Data::Json::JsonObject m_automationPending{ nullptr };
+    TestPattern m_automationTarget = TestPattern::StartOfTest;
+    bool m_automationRestart = false;
+    bool m_automationResetXriteTimer = false;
+    bool m_automationBegun = false;
+    bool m_automationPresented = false;
+    uint64_t m_automationFrame = 0;
+    uint64_t m_automationStateVersion = 0;
+    std::array<double, 32> m_automationFingerprint{};
+    bool m_automationTracked = false;
+    std::wstring m_automationRequestId, m_automationLastRequestId;
 
     void ConstructorInternal();
 

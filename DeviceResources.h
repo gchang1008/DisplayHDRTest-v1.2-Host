@@ -38,6 +38,7 @@ namespace DX
         void HandleDeviceLost();
         void RegisterDeviceNotify(IDeviceNotify* deviceNotify) { m_deviceNotify = deviceNotify; }
         void Present();
+        HRESULT GetLastPresentResult() const { return m_lastPresentResult; }
         void ChangeBackBufferFormat(DXGI_FORMAT fmt);
 		void SetMetadataNeutral();
 
@@ -127,6 +128,7 @@ namespace DX
         UINT                                            m_backBufferCount;
 
         // Cached device properties.
+        HRESULT                                         m_lastPresentResult = E_PENDING;
         HWND                                            m_window;
         D3D_FEATURE_LEVEL                               m_d3dFeatureLevel;
         RECT                                            m_outputSize;
