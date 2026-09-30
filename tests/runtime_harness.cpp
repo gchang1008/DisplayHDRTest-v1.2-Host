@@ -47,6 +47,102 @@ void RenderProbe::Capture(Game& game)
 
 struct RegressionRunner
 {
+    static void Faults(Game& game, bool api)
+    {
+        game.m_showExplanatoryText = false;
+        game.m_bPaused = true;
+        capture = true;
+        DX::StepTimer timer;
+        int sample = 0;
+        auto emit = [&]() {
+            game.Render();
+            std::cout << sample++ << ' ' << pixelsHash << ' ' << static_cast<int>(game.m_currentTest)
+                << ' ' << game.m_currentColor << ' ' << game.m_bPaused << '\n';
+        };
+        for (auto pattern : { Game::TestPattern::ColorPatches, Game::TestPattern::TenPercentPeak,
+            Game::TestPattern::SubTitleFlicker, Game::TestPattern::AnimatedColorGradient })
+        {
+            Prepare(game, pattern, timer, api);
+            emit();
+            for (auto& item : game.m_testPatternResources) {
+                item.second.imageIsValid = false;
+                item.second.effectIsValid = false;
+            }
+            emit();
+#ifdef HAS_AUTOMATION
+            if (api) {
+            auto state = game.AutomationState().GetNamedObject(L"presentation");
+            if (pattern == Game::TestPattern::TenPercentPeak && (state.GetNamedBoolean(L"resourcesValid") || state.GetNamedBoolean(L"submitted")))
+                throw std::runtime_error("Invalid resources reported ready.");
+            }
+#endif
+            game.m_deviceResources->HandleDeviceLost();
+            emit();
+#ifdef HAS_AUTOMATION
+            if (api && !game.AutomationState().GetNamedObject(L"presentation").GetNamedBoolean(L"resourcesValid"))
+                throw std::runtime_error("Restored resources reported invalid.");
+#endif
+            game.OnWindowSizeChanged(800, 600);
+            emit();
+            game.OnWindowSizeChanged(640, 480);
+            emit();
+            game.OnSuspending(); game.OnResuming();
+            emit();
+        }
+    }
+
+    static void Timing(Game& game, bool api)
+    {
+        game.m_showExplanatoryText = false;
+        capture = true;
+        DX::StepTimer timer;
+        int sample = 0;
+        auto emit = [&]()
+        {
+            game.Render();
+            std::cout << sample++ << ' ' << static_cast<int>(game.m_currentTest) << ' '
+                << game.m_testTimeRemainingSec << ' ' << game.m_flashOn << ' '
+                << game.m_currentXRiteIndex << ' ' << game.m_XRitePatchAutoMode << ' '
+                << game.m_bPaused << ' ' << game.m_totalTime << ' ' << pixelsHash << '\n';
+        };
+        for (auto pattern : { Game::TestPattern::WarmUp, Game::TestPattern::Cooldown,
+            Game::TestPattern::TenPercentPeak, Game::TestPattern::TenPercentPeakMAX,
+            Game::TestPattern::LongDurationWhite, Game::TestPattern::FullFramePeak,
+            Game::TestPattern::FlashTest, Game::TestPattern::FlashTestMAX, Game::TestPattern::RiseFallTime,
+            Game::TestPattern::XRiteColors, Game::TestPattern::ProfileCurve,
+            Game::TestPattern::SubTitleFlicker, Game::TestPattern::LocalDimmingContrast,
+            Game::TestPattern::AnimatedGrayGradient, Game::TestPattern::AnimatedColorGradient })
+        {
+            game.m_bPaused = false;
+            game.m_flashOn = false;
+            game.m_currentXRiteIndex = 0;
+            game.m_currentProfileTile = 0;
+            game.m_subtitleVisible = 1;
+            game.m_LocalDimmingBars = 0;
+            game.m_XRitePatchDisplayTime = 1;
+            game.m_testTimeRemainingSec = 0;
+            game.SetTestPattern(Game::TestPattern::ActiveDimming);
+            timer.m_elapsedTicks = timer.m_totalTicks = 0;
+            Prepare(game, pattern, timer, api);
+            emit();
+            if (pattern == Game::TestPattern::XRiteColors) game.ToggleXRitePatchAuto();
+            for (int tick = 1; tick <= 3000; ++tick)
+            {
+                timer.m_elapsedTicks = DX::StepTimer::TicksPerSecond / 60;
+                timer.m_totalTicks += timer.m_elapsedTicks;
+                if (tick == 600 || tick == 900) game.PauseAnimation();
+                game.Update(timer);
+                // Render on phase transitions and evenly spaced animation samples.
+                if (tick % 60 == 0 || tick <= 3) emit();
+            }
+            game.m_testTimeRemainingSec = 0.01f;
+            game.Update(timer); emit();
+            game.Update(timer); emit();
+            // A deliberate restart must use the original initialization again.
+            Prepare(game, pattern, timer, api); emit();
+        }
+    }
+
     static void Prepare(Game& game, Game::TestPattern pattern, DX::StepTimer& fixed, bool api)
     {
 #ifdef HAS_AUTOMATION
@@ -158,6 +254,26 @@ int wmain(int argc, wchar_t** argv)
         game.Initialize(window, 640, 480);
         Sleep(20);
         game.Tick();
+        if (argc > 1 && (wcscmp(argv[1], L"--faults") == 0 || wcscmp(argv[1], L"--faults-api") == 0))
+        {
+            bool api = wcscmp(argv[1], L"--faults-api") == 0;
+#ifdef HAS_AUTOMATION
+            if (api) game.ConfigureAutomation(window, [](bool) {}, []() { return false; });
+#endif
+            RegressionRunner::Faults(game, api);
+            DestroyWindow(window);
+            return 0;
+        }
+        if (argc > 1 && (wcscmp(argv[1], L"--timing") == 0 || wcscmp(argv[1], L"--timing-api") == 0))
+        {
+            bool api = wcscmp(argv[1], L"--timing-api") == 0;
+#ifdef HAS_AUTOMATION
+            if (api) game.ConfigureAutomation(window, [](bool) {}, []() { return false; });
+#endif
+            RegressionRunner::Timing(game, api);
+            DestroyWindow(window);
+            return 0;
+        }
         if (argc > 1 && (wcscmp(argv[1], L"--capture") == 0 || wcscmp(argv[1], L"--capture-api") == 0))
         {
             bool api = wcscmp(argv[1], L"--capture-api") == 0;
