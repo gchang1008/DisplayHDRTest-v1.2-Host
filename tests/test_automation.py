@@ -15,12 +15,18 @@ from displayhdr_api import DisplayHDRClient
 class AutomationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        cls.live_pid = os.environ.get("DISPLAYHDR_LIVE_PID")
+        if cls.live_pid:
+            cls.server_pid = int(cls.live_pid)
+            cls.client = DisplayHDRClient(cls.server_pid, 5)
+            return
         exe = Path(os.environ["LOCALAPPDATA"]) / "DisplayHDRAutomationBuild/automation-x64-Release/harness/bin/RuntimeHarness.exe"
         startup = subprocess.STARTUPINFO()
         startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
         startup.wShowWindow = 0
         cls.process = subprocess.Popen([str(exe)], cwd=exe.parent, startupinfo=startup,
                                        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        cls.server_pid = cls.process.pid
         try:
             cls.client = DisplayHDRClient(cls.process.pid, 5)
         except Exception:
@@ -31,6 +37,8 @@ class AutomationTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls.client.close()
+        if cls.live_pid:
+            return
         user = ctypes.WinDLL("user32")
         user.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
         user.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
@@ -72,7 +80,7 @@ class AutomationTests(unittest.TestCase):
                 self.assertEqual(state["test"]["id"], test["id"])
                 self.assertTrue(state["presentation"]["applied"])
                 self.assertTrue(state["presentation"]["submitted"])
-                self.assertFalse(state["presentation"]["presented"])
+                self.assertEqual(state["presentation"]["presented"], bool(self.live_pid))
 
     def test_every_persistent_setting_roundtrips(self):
         settings = {
@@ -177,7 +185,7 @@ class AutomationTests(unittest.TestCase):
         self.assertFalse(self.client.request("unknown_command")["ok"])
         self.assertFalse(self.client.request("get_state", settings={})["ok"])
         self.client.close()
-        type(self).client = DisplayHDRClient(self.process.pid)
+        type(self).client = DisplayHDRClient(self.server_pid)
         self.assertTrue(self.client.request("get_state")["ok"])
 
 
