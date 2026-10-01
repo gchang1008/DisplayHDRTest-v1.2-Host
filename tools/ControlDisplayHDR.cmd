@@ -1,10 +1,6 @@
 @echo off
 pushd "%~dp0"
-if exist "runtime\python.exe" (
-    "runtime\python.exe" -X utf8 displayhdr_server.py %*
-) else (
-    python displayhdr_server.py %*
-)
+"runtime\python.exe" -X utf8 displayhdr_remote.py %*
 set "displayhdrExitCode=%ERRORLEVEL%"
 if not "%displayhdrExitCode%"=="0" pause
 popd

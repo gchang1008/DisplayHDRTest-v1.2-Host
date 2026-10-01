@@ -178,3 +178,10 @@
 - 17 項 HTTP 契約／故障測試通過，涵蓋全部 47 個圖樣、25 個設定、請求識別、錯誤原子性、斷線、正文逾時及不自動重送。
 - 正式版本的 HTTP 測試及本機區域網路 IP 呼叫已驗證；8 次硬體比較的兩組彙整均通過既有效能門檻。
 - 尚未在第二台電腦實測，不能將本機 IP 呼叫當作跨電腦連線與防火牆驗收。操作文件見 `Remote_API.md`。
+
+## 免安裝交付（2026-10-01）
+
+- 已產生 `packages/DisplayHDR_Host_x64.zip` 與 `packages/DisplayHDR_Client_x64.zip`，包含各自的官方 Python 3.13.16 可攜式環境、所需 DLL、啟動入口、使用說明與授權檔。
+- Host 包含原有 C++ Release 執行檔及完整 shader／PNG；Client 只包含控制程式與其執行環境。部署不需安裝 Python、Visual Studio 或 Visual C++ Redistributable。
+- 3 項封裝測試與包內環境執行的 17 項正式 API 驗收通過。Windows 顯示驅動、HDR 設定與網路可達性維持待測系統本身的必要條件。
+- ZIP 與包內檔案均提供 SHA-256；重建方式為 `python tools/package.py`，部署說明見 `Portable_Packages.md`。

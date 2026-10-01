@@ -2,6 +2,8 @@
 
 ## 執行 DisplayHDR 的電腦
 
+使用可攜式 Host／Client ZIP 時，不需要額外安裝 Python；解壓後的入口會使用包內 runtime。部署與操作見 [可攜式整合包](Portable_Packages.md)。以下 `python` 指令可改用包內 `runtime\python.exe -X utf8`。
+
 使用 Windows，安裝 Python 3 並確保 `python` 可在命令列執行。正式 C++ 程式的編譯器及執行檔沒有因 HTTP 介面改變；Python 服務負責將網路指令轉送至既有 Named Pipe。
 
 在 `build-output/automation-x64-Release` 雙擊 `StartDisplayHDR.cmd`。這個入口自動啟動 DisplayHDR（`--api`）及 HTTP 服務，顯示 `READY` 後可接受控制。預設連接埠為 **8765**，監聽本機全部 IPv4 介面。

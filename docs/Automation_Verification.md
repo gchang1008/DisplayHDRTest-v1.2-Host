@@ -148,3 +148,16 @@ python -m unittest discover -s tests -p 'test_*.py' -v
 封裝入口驗收曾重現 Windows 的同連接埠重複綁定；現已以 `SO_EXCLUSIVEADDRUSE` 修正並新增占用測試，第二次啟動回報 `WinError 10048`，不會啟動第二個 DisplayHDR。此行為及排他綁定方式依 [Microsoft Winsock 文件](https://learn.microsoft.com/en-us/windows/win32/winsock/using-so-reuseaddr-and-so-exclusiveaddruse) 核對。沒有修改 C++ 核心。
 
 最終完整套件共 31 項通過，94.295 秒；原有 HDR／SDR 共 320 組靜態圖樣／metadata 及 1,710 個動態狀態／像素檢查點仍一致。日誌：`build-output/remote-full-suite.log`。部署腳本與來源逐位元相符，證據：`build-output/remote-deployment-check.json`。
+
+## 免安裝整合包驗證（2026-10-01）
+
+- Host／Client 分別內附官方 Python 3.13.16 Windows x64 embeddable runtime。下載 ZIP 的 SHA-256 與 [Python 官方發行頁](https://www.python.org/downloads/release/python-31316/) 一致，打包工具固定來源與雜湊。
+- Host 原有 Release 採 `/MT` 靜態 C Runtime；`dumpbin /dependents` 顯示只依賴 Windows 的 DirectX、WinRT 與系統 DLL。Python 所需 `vcruntime140.dll`、`vcruntime140_1.dll`、`libffi-8.dll` 已隨包提供。
+- 3 項封裝測試通過：ZIP CRC／解壓後所有檔案雜湊、隔離 runtime 與實際 DLL 路徑、Host／Client 啟動入口。
+- 測試解壓路徑包含中文、空白與 UNC。子程序 PATH 只保留 Windows System32，PYTHONHOME／PYTHONPATH 指向不存在位置；runtime `isolated=1`，sys.path 全部位於整合包，指定 C Runtime 與 libffi 實際載入路徑皆位於包內 runtime。
+- 從 Host ZIP 的啟動入口執行正式 DisplayHDR；Client ZIP 成功取得 catalog、指定測試、查詢及切換全畫面藍色。包內 Python 執行的 17 項正式 API 驗收全部通過。
+- 正常關閉 DisplayHDR 後 HTTP 監聽停止；本輪沒有修改 C++ 核心。驗收過程曾發生測試腳本混合編碼輸出錯誤，修正測試輸出後完成控制，並非包內 Host 或 Client 執行失敗。
+
+證據：`build-output/portable-tests.log`、`portable-live-api-tests.log`、`portable-live-host.log`、`portable-live-client-results.json` 及 `portable-package-build.json`。交付 ZIP 位於工作區 `packages/`，旁附 `SHA256SUMS.txt`；包內含 `manifest.json`。
+
+這是排除系統 Python 與檢查 DLL 來源的測試，並未重新安裝一台乾淨 Windows，也未在第二台電腦實測。Windows 10／11 x64 的系統功能、顯示驅動與 Host HDR 設定仍由目標作業系統提供；不要求額外安裝本程式的 Python／C++ 執行依賴。
