@@ -4,11 +4,11 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 from pathlib import Path
 import socket
-import subprocess
-import threading
 import time
+import threading
 
 from displayhdr_api import DisplayHDRClient
+from displayhdr_supervisor import Supervisor
 
 
 def failure(identifier, code, message, uncertain=False):
@@ -83,6 +83,25 @@ class Handler(BaseHTTPRequestHandler):
             identifier = request.get("id", "")
             if not isinstance(identifier, str):
                 identifier = ""
+            command = request.get("command")
+            if command in ("get_host_status", "restart_host"):
+                if type(request.get("version")) is not int or request["version"] != 1 or not identifier or set(request) - {"version", "id", "command"}:
+                    raise ValueError("Host commands require version 1, an id, and no additional fields.")
+                supervisor = self.server.supervisor
+                if command == "restart_host":
+                    if supervisor is None:
+                        raise ValueError("Restart requires a managed Host launcher.")
+                    supervisor.restart()
+                host = supervisor.status() if supervisor else {"status": "ready", "pid": self.server.pid,
+                                                                "restartSupported": False, "error": ""}
+                self.reply(200, {"version": 1, "id": identifier, "ok": True, "host": host})
+                return
+            if self.server.supervisor is not None:
+                host = self.server.supervisor.status()
+                if host["status"] != "ready":
+                    self.reply(503, failure(identifier, "host_unavailable", "Renderer is " + host["status"] + "."))
+                    return
+                self.server.pid = host["pid"]
             with DisplayHDRClient(self.server.pid, self.server.pipe_timeout) as client:
                 response = client.send(request)
             self.reply(200, response)
@@ -111,6 +130,7 @@ def create_server(host, port, pid, pipe_timeout=5, body_timeout=5):
     # One HTTP request at a time; no background command queue or automatic replay.
     server = Server((host, port), Handler)
     server.pid = pid
+    server.supervisor = None
     server.pipe_timeout = pipe_timeout
     server.body_timeout = body_timeout
     return server
@@ -131,34 +151,18 @@ def main():
         parser.error("PID must be positive.")
     if args.pid is None and not args.exe.is_file():
         parser.error(f"Executable not found: {args.exe}")
-    process = None
     # Bind before launching so port errors do not leave a new program running.
     with create_server(args.host, args.port, args.pid) as server:
-        if args.pid is None:
-            startup = subprocess.STARTUPINFO()
-            startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
-            startup.wShowWindow = 1
-            process = subprocess.Popen([str(args.exe.resolve()), "--api"], cwd=args.exe.resolve().parent, startupinfo=startup)
-            server.pid = process.pid
-        with DisplayHDRClient(server.pid, timeout=15) as client:
-            response = client.request("catalog")
-            if not response["ok"]:
-                raise RuntimeError(str(response))
-        print(f"READY pid={server.pid} endpoint=http://{args.host}:{args.port}/api", flush=True)
-        stopped = threading.Event()
-        if process is not None:
-            def watch():
-                while not stopped.wait(.2):
-                    if process.poll() is not None:
-                        server.shutdown()
-                        return
-            threading.Thread(target=watch, daemon=True).start()
-        try:
-            server.serve_forever(poll_interval=.2)
-        finally:
-            stopped.set()
-        if process is not None and process.poll() not in (None, 0):
-            raise RuntimeError(f"DisplayHDR exited with code {process.returncode}.")
+        supervisor = Supervisor(args.exe, args.pid)
+        server.supervisor = supervisor
+        def start_renderer():
+            supervisor.start()
+            host = supervisor.status()
+            print(f"{'READY' if host['status'] == 'ready' else 'SERVICE'} pid={host['pid']} "
+                  f"endpoint=http://{args.host}:{args.port}/api status={host['status']}", flush=True)
+
+        threading.Thread(target=start_renderer, daemon=True).start()
+        server.serve_forever(poll_interval=.2)
         # Stopping the network service preserves the running test and its state.
 
 

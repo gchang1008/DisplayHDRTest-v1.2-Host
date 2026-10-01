@@ -28,7 +28,7 @@ Client 新增 GUI 遙控器，雙擊 `StartDisplayHDRClient.cmd`，輸入 Host I
 
 Windows 防火牆須允許控制端連入所選 TCP 連接埠。啟動工具不會自動修改防火牆。依確認需求，本版不提供身分驗證或 HTTPS。
 
-關閉 DisplayHDR 視窗後，啟動入口的服務自動退出。服務停止不主動終止 DisplayHDR 或變更其測試狀態；可用以下方式重新連接仍在執行的 `--api` 實例：
+關閉 DisplayHDR 視窗後，HTTP 服務保持運行，可由 Client 要求重啟。服務停止不主動終止 DisplayHDR 或變更其測試狀態；可用以下方式重新連接仍在執行的 `--api` 實例：
 
 ```powershell
 python displayhdr_server.py --pid 12345 --host 192.168.1.107 --port 8765
@@ -89,6 +89,7 @@ assert state["presentation"]["presented"]
 | 408 | 正文未在 5 秒內送完，未轉送至 DisplayHDR |
 | 411／413／415 | 缺少單一 Content-Length、訊息大小不符、Content-Type 不符 |
 | 502 | 本機通訊中斷／不可用 |
+| 503 | Host 程式尚未就緒，未轉送操作 |
 | 504 | 本機連線或指令處理逾時 |
 
 網路服務錯誤沿用 `version`、`id`、`ok:false`、`error`，另包含 `error.requestMayHaveApplied`。502／504 的設定指令會保守標示 `true`，表示必須查詢確認，不代表確實已套用。無法解析請求識別值時 `id` 為空字串。
@@ -112,3 +113,30 @@ HTTP 正文接收逾時 5 秒；Named Pipe 連接與每次指令等待各最多 
 同機 HTTP／真實 Named Pipe 的契約測試，以及正式執行檔的 HTTP 測試均已執行；跨電腦驗收仍需在另一台電腦執行上方範例。同機呼叫主機區域網路 IP 可確認監聽介面，不能證明另一台電腦可穿過主機防火牆。
 
 本版只提供控制與狀態查詢，不提供遠端畫面串流或量測設備驅動。
+
+## Host 程式重啟與程序狀態
+
+新版 Host HTTP 服務持續運作，負責監管它啟動的 DisplayHDR 程式。關閉或崩潰不會自動重啟；Client 可明確要求重啟。此功能不重啟 Windows，也不能重啟已停止的 HTTP 服務。
+
+```json
+{"version":1,"id":"status-1","command":"get_host_status"}
+{"version":1,"id":"restart-1","command":"restart_host"}
+```
+
+成功回覆包含 `host`，沒有測試 `state`：
+
+```json
+{"version":1,"id":"status-1","ok":true,"host":{"status":"ready","pid":1234,"restartSupported":true,"error":""}}
+```
+
+- `status`：`starting`（等待啟動）、`restarting`（關閉舊程序）、`ready`、`stopped`（正常結束）、`failed`（啟動失敗或異常結束）。
+- `pid`：目前或最近一次啟動的程序識別值；尚未成功啟動時可為 null。`error` 提供失敗原因。
+- `restart_host` 非同步執行，成功回覆只表示已接受；必須查詢到 `ready` 並成功取得 `get_state`，才能確認恢復控制。
+- 重啟先正常關閉服務啟動的程序；等待 5 秒仍未退出時終止該程序，再啟動相同執行檔與 `--api`。不關閉其他 DisplayHDR 程序。
+- 程式尚未 ready 時，圖樣操作／查詢回覆 HTTP 503、`host_unavailable`，不轉送操作。狀態查詢仍可用。
+- 兩個新指令只接受 version、id、command；額外欄位、重複重啟及附掛模式的重啟要求回覆 400。`--pid` 附掛模式的 `restartSupported` 為 false。
+- 重啟會重新初始化程式，原有測試、設定與倒數不保留，也不重播先前控制指令。
+- 請求送達後即使回覆遺失，重啟可能已開始；不要自動重送，先查詢程序狀態。
+- 本功能需要新版 Host 整合包。新版 Client 仍可控制舊 Host，但重啟按鈕停用。
+
+命令列範例：`python displayhdr_remote.py --url http://192.168.1.107:8765 --command restart_host`；查詢改為 `--command get_host_status`。

@@ -22,3 +22,5 @@ python -m unittest discover -s tests -p test_portable.py -v
 
 拆分前的 Client 程式與整合驗證紀錄仍保留於既有 Git 歷史；目前版本的 Client 原始碼、GUI 文件與封裝工具由獨立儲存庫維護。
 
+
+HTTP 服務另提供 `get_host_status` 與 `restart_host`，可由新版 Client GUI 重啟 DisplayHDR 程式。關閉測試視窗後服務仍持續運作；重啟會初始化圖樣及設定。詳見 [遠端 API 文件](docs/Remote_API.md)。

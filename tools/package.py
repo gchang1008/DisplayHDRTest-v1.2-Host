@@ -44,7 +44,7 @@ def main():
         with ZipFile(archive) as source:
             source.extractall(runtime)
         (runtime / 'python313._pth').write_text('python313.zip\n.\n..\n', encoding='ascii')
-        files = ('displayhdr_api.py', 'displayhdr_server.py', 'StartDisplayHDR.cmd')
+        files = ('displayhdr_api.py', 'displayhdr_server.py', 'displayhdr_supervisor.py', 'StartDisplayHDR.cmd')
         for name in files:
             shutil.copy2(repo / 'tools' / name, folder / name)
         shutil.copy2(executable, folder / executable.name)
