@@ -344,7 +344,8 @@ JsonObject Game::AutomationState()
     Put(test, L"id", info.id);
     std::wstring title = info.title;
     if (m_currentTest == TestPattern::ColorPatches || m_currentTest == TestPattern::ColorPatchesFull || m_currentTest == TestPattern::ColorPatchesMAX)
-        title += L" " + std::wstring(colors[m_currentColor]) + (m_currentColor == 3 ? L" Point" : L" Chromaticity Point");
+        title = std::wstring(m_currentTest == TestPattern::ColorPatchesMAX ? L"6.b Checking " : L"6. Checking ")
+            + colors[m_currentColor] + (m_currentColor == 3 ? L" Point" : L" Chromaticity Point");
     if (m_currentTest == TestPattern::LocalDimmingContrast) title += m_LocalDimmingBars == 0 ? L"  1-D" : L"  2-D";
     if (m_currentTest == TestPattern::FlashTest) title = m_flashOn ? L"2.a Flash Test On" : L"2.a Flash Test Off";
     if (m_currentTest == TestPattern::FlashTestMAX) title = m_flashOn ? L"2.b MAX Flash Test On" : L"2.b MAX Flash Test Off";

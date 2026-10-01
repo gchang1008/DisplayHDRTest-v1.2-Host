@@ -125,6 +125,18 @@ class AutomationTests(unittest.TestCase):
         self.assertIsNone(state["effective"]["nits"])
         self.assertEqual(state["effective"]["referenceWhitePq"], 636)
 
+    def test_rgb_titles_match_with_text_on_and_off(self):
+        for test in ("ColorPatches", "ColorPatchesFull", "ColorPatchesMAX"):
+            for color in ("Red", "Green", "Blue", "White"):
+                expected = ("6.b Checking " if test == "ColorPatchesMAX" else "6. Checking ")
+                expected += color + (" Point" if color == "White" else " Chromaticity Point")
+                for visible in (True, False):
+                    with self.subTest(test=test, color=color, textVisible=visible):
+                        state = self.state(test=test, settings={"color": color, "textVisible": visible, "fullscreen": False})
+                        self.assertEqual(state["test"]["title"], expected)
+                        self.assertEqual(state["settings"]["color"], color)
+                        self.assertEqual(state["settings"]["textVisible"], visible)
+
     def test_requested_examples(self):
         state = self.state(test="ActiveDimming", settings={"nits": 49.79, "textVisible": True}, id="nits-example")
         self.assertEqual(state["test"]["title"], "5.1 Active Dimming")

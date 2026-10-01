@@ -203,3 +203,10 @@ X-Rite 名稱中的問號來自目前原有畫面輸出，本次只使清單一�
 - `tests/test_unicode.py` 核對編譯後執行檔的三個 UTF-16 字串。
 - 正式程式透過 API 核對 Start Screen 的 `Copyright © VESA`、`Includes Portrait X-Rite™ color technology`，以及 X-Rite 頁面的 `1.2.5 X-Rite™ Colors`，三個字串的 Unicode 碼位均正確。
 - 全部 47 頁的清單名稱與畫面首行／固定前綴核對通過。實機文字驗證腳本為 `build-output/verify_unicode.py`。
+
+
+## RGB 標題在 Text On／Off 間一致（2026-10-01）
+
+修正 API 的隱藏文字標題組合：直接依目前測試及顏色產生標題，不再把清單的預設紅色完整標題與目前顏色重複串接。測試 ID、清單名稱、設定與原有畫面渲染不變。
+
+在重新編譯的正式 x64 Release 程式執行 `test_rgb_titles_match_with_text_on_and_off`，核對 ColorPatches、ColorPatchesFull 與 ColorPatchesMAX，四種 RGBW 顏色及 Text On／Off，共 24 組狀態。所有標題均符合完整預期字串，色彩及文字設定均一致。正式程式啟動驗證入口為 `build-output/verify_rgb_titles.py`；Client 不需修改。
