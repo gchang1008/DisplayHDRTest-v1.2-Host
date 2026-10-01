@@ -12,7 +12,7 @@
 
 ## 第一次使用：照這幾步操作
 
-1. 開啟 [Host 下載頁面](https://github.com/gchang1008/DisplayHDRTest-v1.2/releases)，在最新版本的 **Assets** 區下載 `DisplayHDR_Host_x64.zip`。
+1. 開啟 [Host 下載頁面](https://github.com/gchang1008/DisplayHDRTest-v1.2-Host/releases)，在最新版本的 **Assets** 區下載 `DisplayHDR_Host_x64.zip`。
 2. 將 ZIP 複製到連接待測螢幕的電腦，按滑鼠右鍵選「解壓縮全部」。保留解壓縮後的所有檔案與資料夾。
 3. 進入解壓縮後的資料夾，雙擊 **`StartDisplayHDR.cmd`**。
 4. 程式會開啟測試畫面，並顯示一個文字視窗。文字視窗出現 **`READY`**，代表可以接受控制。使用期間請保留這個文字視窗。

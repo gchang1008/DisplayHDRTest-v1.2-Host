@@ -121,10 +121,10 @@
 
 ## 預計涉及檔案
 
-- `DisplayHDRTest-v1.2-source/Main.cpp`
-- `DisplayHDRTest-v1.2-source/Game.h`
-- `DisplayHDRTest-v1.2-source/Game.cpp`
-- `DisplayHDRTest-v1.2-source/DisplayHDRComplianceTests.vcxproj`
+- `DisplayHDRTest-v1.2-Host/Main.cpp`
+- `DisplayHDRTest-v1.2-Host/Game.h`
+- `DisplayHDRTest-v1.2-Host/Game.cpp`
+- `DisplayHDRTest-v1.2-Host/DisplayHDRComplianceTests.vcxproj`
 - 新增 Named Pipe／API 實作檔（檔名待定）
 
 ## 實作狀態（2026-09-30）
