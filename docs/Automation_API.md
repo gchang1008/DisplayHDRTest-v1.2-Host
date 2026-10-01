@@ -62,7 +62,9 @@ GUI 遙控器使用新增的 `key` 指令，例如：
 
 ### 指定測試與設定
 
-`catalog.tests` 列出全部 47 個測試畫面，每個項目具有穩定的 `id`、原始標題定義與 `applicableSettings`。請使用 `id` 切換，不使用標題或顯示順序。8% 色塊為 `ColorPatches`，全畫面色塊為 `ColorPatchesFull`。
+`catalog.tests` 列出全部 47 個測試畫面，每個項目具有穩定的 `id`、畫面首行標題所對應的 `title` 與 `applicableSettings`。請使用 `id` 切換，不使用標題或顯示順序。8% 色塊為 `ColorPatches`，全畫面色塊為 `ColorPatchesFull`。
+
+清單名稱是固定的選單標籤，並不代表目前設定。RGB 頁面使用預設紅色的完整首行標題；Flash 頁面使用預設 Off 標題。倒數秒數、亮度、漸層 RGB 數值及 Local Dimming 的 1-D／2-D 模式不加入固定標籤。切換後的實際標題與設定請查詢 `get_state`；文字顯示時可用 `test.displayedText` 核對畫面文字。X-Rite 頁面沿用目前程式實際輸出的 `1.2.5 X-Rite?Colors`，本次未修改原有畫面中的字元。
 
 `catalog.settingSchema` 是機器可讀的型別、範圍、單位與列舉值；`catalog.settings` 是目前值；`startupDefaults` 是本次啟動時的原程式狀態。原程式部分校正欄位在首次進入測試前使用初始化哨兵值，可能不在 API 可寫範圍內；不可將整份啟動快照盲目回寫。
 

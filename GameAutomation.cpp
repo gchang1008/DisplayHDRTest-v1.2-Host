@@ -16,10 +16,10 @@ namespace
     struct TestInfo { Game::TestPattern pattern; wchar_t const* id; wchar_t const* title; };
     TestInfo const tests[] = {
         { Game::TestPattern::StartOfTest, L"StartOfTest", L"Home.   Start Screen" },
-        { Game::TestPattern::ConnectionProperties, L"ConnectionProperties", L"Connection Properties" },
-        { Game::TestPattern::PanelCharacteristics, L"PanelCharacteristics", L"Supported PQ Values -" },
-        { Game::TestPattern::ResetInstructions, L"ResetInstructions", L"For external displays, use their OSD to reset" },
-        { Game::TestPattern::PQLevelsInNits, L"PQLevelsInNits", L"" },
+        { Game::TestPattern::ConnectionProperties, L"ConnectionProperties", L"Connection properties:" },
+        { Game::TestPattern::PanelCharacteristics, L"PanelCharacteristics", L"Reported Panel Characteristics" },
+        { Game::TestPattern::ResetInstructions, L"ResetInstructions", L"Start of performance tests" },
+        { Game::TestPattern::PQLevelsInNits, L"PQLevelsInNits", L"PQ/ST 2084 levels in nits" },
         { Game::TestPattern::WarmUp, L"WarmUp", L"Warm-Up:" },
         { Game::TestPattern::TenPercentPeak, L"TenPercentPeak", L"1.a Peak Luminance @ 8.00% screen area" },
         { Game::TestPattern::TenPercentPeakMAX, L"TenPercentPeakMAX", L"1.b Peak Luminance MAX @ 8.00% screen area" },
@@ -32,8 +32,8 @@ namespace
         { Game::TestPattern::ActiveDimming, L"ActiveDimming", L"5.1 Active Dimming" },
         { Game::TestPattern::ActiveDimmingDark, L"ActiveDimmingDark", L"5.2 Active Dimming Dark" },
         { Game::TestPattern::ActiveDimmingSplit, L"ActiveDimmingSplit", L"5.3 Active Dimming Splitscreen" },
-        { Game::TestPattern::ColorPatches, L"ColorPatches", L"6. Checking" },
-        { Game::TestPattern::ColorPatchesFull, L"ColorPatchesFull", L"6. Checking" },
+        { Game::TestPattern::ColorPatches, L"ColorPatches", L"6. Checking Red Chromaticity Point" },
+        { Game::TestPattern::ColorPatchesFull, L"ColorPatchesFull", L"6. Checking Red Chromaticity Point" },
         { Game::TestPattern::BitDepthPrecision, L"BitDepthPrecision", L"7. Bit-Depth/Precision" },
         { Game::TestPattern::RiseFallTime, L"RiseFallTime", L"8. Rise/Fall Time" },
         { Game::TestPattern::ProfileCurve, L"ProfileCurve", L"9. Validating 2084 Profile Curve in nits" },
@@ -41,7 +41,7 @@ namespace
         { Game::TestPattern::BlackLevelHDRvsSDR, L"BlackLevelHDRvsSDR", L"1.2.2 Black Level in HDR vs SDR" },
         { Game::TestPattern::BlackLevelCrush, L"BlackLevelCrush", L"v1.2.3 Black Level Crush Test:" },
         { Game::TestPattern::SubTitleFlicker, L"SubTitleFlicker", L"1.2.4 Subtitle Flicker Test:" },
-        { Game::TestPattern::XRiteColors, L"XRiteColors", L"1.2.5 X-Rite\u2122 Colors" },
+        { Game::TestPattern::XRiteColors, L"XRiteColors", L"1.2.5 X-Rite?Colors" },
         { Game::TestPattern::EndOfMandatoryTests, L"EndOfMandatoryTests", L"This is the end of mandatory test content." },
         { Game::TestPattern::SharpeningFilter, L"SharpeningFilter", L"Fresnel zone plate (sharpening test)" },
         { Game::TestPattern::ToneMapSpike, L"ToneMapSpike", L"ST.2084 Spike (Tone map test)" },
@@ -59,7 +59,7 @@ namespace
         { Game::TestPattern::AnimatedColorGradient, L"AnimatedColorGradient", L"Animated Color Gradient" },
         { Game::TestPattern::BlackLevelHdrCorners, L"BlackLevelHdrCorners", L"4. Corner test for HDR black level" },
         { Game::TestPattern::BlackLevelSdrTunnel, L"BlackLevelSdrTunnel", L"5. Tunnel for SDR black level" },
-        { Game::TestPattern::ColorPatchesMAX, L"ColorPatchesMAX", L"6.b Checking" },
+        { Game::TestPattern::ColorPatchesMAX, L"ColorPatchesMAX", L"6.b Checking Red Chromaticity Point" },
         { Game::TestPattern::EndOfTest, L"EndOfTest", L"This is the end of the test content." },
         { Game::TestPattern::Cooldown, L"Cooldown", L"Cool-down:" }
     };

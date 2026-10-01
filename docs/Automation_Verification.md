@@ -175,3 +175,21 @@ python -m unittest discover -s tests -p 'test_*.py' -v
 證據：build-output/gui-tests.log、remote-key-tests.log、gui-remote-regression.log、gui-portable-tests.log、gui-live-results.json、gui-native-key.log 與 displayhdr-gui-preview.png。
 
 這輪驗證為同機透過 HTTP 的 Client／Host，尚未使用第二台電腦驗證網路／防火牆，也未使用乾淨重裝系統。按鍵比對檢查程式狀態，沒有新增光學量測；既有圖樣／metadata 與動態回歸證據仍見前文。
+# Host 清單名稱核對（2026-10-01）
+
+使用重新編譯的 x64 Release 執行檔，透過 API 逐一切換全部 47 個頁面並顯示說明文字，核對 `catalog.tests[].title` 與 `test.displayedText` 的第一個非空白行。47 個項目均符合完整標題或不含動態值的固定前綴。RGB 與 Flash 使用啟動預設設定核對，未宣稱固定選單會隨顏色或 On／Off 更新。
+
+本次修正 8 個清單名稱：
+
+| 測試 ID | 修正後名稱 |
+| --- | --- |
+| `ConnectionProperties` | `Connection properties:` |
+| `PanelCharacteristics` | `Reported Panel Characteristics` |
+| `ResetInstructions` | `Start of performance tests` |
+| `PQLevelsInNits` | `PQ/ST 2084 levels in nits` |
+| `ColorPatches` | `6. Checking Red Chromaticity Point` |
+| `ColorPatchesFull` | `6. Checking Red Chromaticity Point` |
+| `ColorPatchesMAX` | `6.b Checking Red Chromaticity Point` |
+| `XRiteColors` | `1.2.5 X-Rite?Colors` |
+
+X-Rite 名稱中的問號來自目前原有畫面輸出，本次只使清單一致。程式碼修改僅涉及 `GameAutomation.cpp` 的名稱字串；未修改 `Game.cpp`、測試 ID、設定控制、繪圖或鍵盤處理。這是名稱與切換驗證，沒有重新執行時序或光學驗證。完整快照記錄於 `build-output/title-audit.json`。
