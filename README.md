@@ -1,26 +1,58 @@
-# DisplayHDRTest
-VESA DisplayHDR compliance tests
+# DisplayHDRTest Automation Host
 
-This is the github repo for source code of the DisplayHDRTest app
-which generates the test patterns for DisplayHDR certification.
+本專案是 [VESA DisplayHDRTest-v1.2](https://github.com/vesa-org/DisplayHDRTest-v1.2) 的 fork，提供 HDR 測試圖樣、本機 API 與區域網路遠端控制。測試名稱與鍵盤操作沿用原版設計。
 
-## 自動化 Host
+## 程式組成
 
-本 fork 的 `feature/automation-api` 分支新增本機 Named Pipe 與區域網路 HTTP 控制，保留原版測試圖樣與鍵盤功能。[Client 遙控器](https://github.com/gchang1008/DisplayHDRTest-v1.2-Client) 已拆至獨立專案。
+- **C++ 測試程式**：產生 HDR 測試畫面，提供本機 Named Pipe API。
+- **Python Host 服務**：接收 Client 的 HTTP 指令、轉送至測試程式，並提供程序狀態查詢與重啟功能。
 
-解壓 Host ZIP 後執行 `StartDisplayHDR.cmd`，預設 TCP 8765。部署端不需安裝 Python；詳見 [部署文件](docs/Portable_Packages.md) 與 [API 契約](docs/Automation_API.md)。
+Host 整合包已包含 Python runtime，使用者不需自行安裝 Python。C++ 測試程式仍由 Visual Studio C++ 編譯；Python 用於控制服務與封裝工具。
 
-開發端以 Visual Studio C++／Windows SDK 與 Python 3.13 執行：
+## 部署與啟動
+
+適用 Windows 10／11 x64；HDR 測試需啟用 Windows HDR 並使用支援的顯示器與顯示驅動。
+
+1. 從 [Host Releases](https://github.com/gchang1008/DisplayHDRTest-v1.2/releases) 下載 `DisplayHDR_Host_x64.zip`。
+2. 完整解壓至待測電腦，執行 `StartDisplayHDR.cmd`。
+3. 顯示 `READY` 後，即可透過 [Client 遙控器](https://github.com/gchang1008/DisplayHDRTest-v1.2-Client) 或 HTTP API 操作。
+
+預設監聽全部 IPv4 介面的 TCP **8765**；Windows 防火牆需允許控制端連入。Client 填入待測電腦的 IP，同機操作可使用 `127.0.0.1`。
+
+指定監聽位址與連接埠：
+
+```powershell
+.\StartDisplayHDR.cmd --host 192.168.1.107 --port 8765
+```
+
+## 控制與程序狀態
+
+- `catalog`、`get_state`：查詢可用測試與目前測試／設定。
+- `set_state`、`key`：設定測試圖樣、參數，或執行原版按鍵操作。
+- `get_host_status`、`restart_host`：查詢程序狀態與重啟 Host 測試程式。
+
+關閉測試視窗後，HTTP 服務保持運行，可由 Client 的 `Restart Host` 重新啟動測試程式。重啟會初始化測試、設定與倒數；不重啟 Windows。控制端斷線不會自動重啟或重送操作。
+
+## 從原始碼建置
+
+以下是**開發端**需求；使用整合包的待測電腦不需安裝這些開發工具。
+
+- Visual Studio C++ 建置工具與 Windows SDK。
+- Python 3.13，用於執行封裝工具。
+
+在儲存庫根目錄執行：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools/build.ps1
 python tools/package.py
-python -m unittest discover -s tests -p test_portable.py -v
 ```
 
-建置輸出在本專案 `build-output/automation-x64-Release/`；Host ZIP 與 SHA-256 在 `dist/`。封裝工具只建立 Host，不需要 Client 原始碼或 Qt。上游仍為 [VESA 官方儲存庫](https://github.com/vesa-org/DisplayHDRTest-v1.2)。
+預設建立 x64 Release，建置輸出位於 `build-output/automation-x64-Release/`；Host ZIP 與 SHA-256 校驗值位於 `dist/`。
 
-拆分前的 Client 程式與整合驗證紀錄仍保留於既有 Git 歷史；目前版本的 Client 原始碼、GUI 文件與封裝工具由獨立儲存庫維護。
+## 文件與授權
 
-
-HTTP 服務另提供 `get_host_status` 與 `restart_host`，可由新版 Client GUI 重啟 DisplayHDR 程式。關閉測試視窗後服務仍持續運作；重啟會初始化圖樣及設定。詳見 [遠端 API 文件](docs/Remote_API.md)。
+- [整合包部署說明](docs/Portable_Packages.md)
+- [遠端 HTTP API](docs/Remote_API.md)
+- [本機 API 與測試設定契約](docs/Automation_API.md)
+- [重啟功能驗證紀錄](docs/Restart_Verification.md)
+- [MIT 授權條款](LICENSE)
