@@ -117,7 +117,7 @@ PQ／sRGB 控制值維持原程式浮點型別，允許小數。校正 PQ 的 AP
 | 欄位 | 意義 |
 | --- | --- |
 | `test.id` | 當前測試的穩定識別值 |
-| `test.title` / `titleSource` | 顯示文字存在時取得實際首行；隱藏時回傳原始定義與動態名稱。來源為 `rendered` 或 `definition` |
+| `test.title` / `titleSource` | 使用測試清單的名稱定義，不受 Text On／Off 影響；RGB 顏色、Flash On／Off 與 Local Dimming 模式仍依目前狀態更新。標題不包含倒數或附加設定值；來源固定為 `definition`。實際畫面文字由 `test.displayedText` 查詢 |
 | `test.displayedText` | 擷取的測試標題／說明文字區塊，不是整張畫面所有文字的 OCR |
 | `settings` / `applicableSettings` | 完整共用設定快照／當前適用欄位 |
 | `lastSetRequestId` | 最近完成套用的設定請求識別值 |

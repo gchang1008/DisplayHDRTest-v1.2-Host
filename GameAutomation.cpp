@@ -349,23 +349,8 @@ JsonObject Game::AutomationState()
     if (m_currentTest == TestPattern::LocalDimmingContrast) title += m_LocalDimmingBars == 0 ? L"  1-D" : L"  2-D";
     if (m_currentTest == TestPattern::FlashTest) title = m_flashOn ? L"2.a Flash Test On" : L"2.a Flash Test Off";
     if (m_currentTest == TestPattern::FlashTestMAX) title = m_flashOn ? L"2.b MAX Flash Test On" : L"2.b MAX Flash Test Off";
-    if (m_currentTest == TestPattern::ConnectionProperties) title = L"Render GPU: " + std::wstring(m_adapterDesc.Description);
-    if (m_currentTest == TestPattern::PanelCharacteristics && !CheckHDR_On())
-        title = L"Before starting tests, make sure \"HDR and Advanced color\"";
-    wchar_t const* titleSource = L"definition";
-    if (!m_automationRenderedText.empty() && m_currentTest != TestPattern::PQLevelsInNits)
-    {
-        auto start = m_automationRenderedText.find_first_not_of(L"\r\n");
-        if (start != std::wstring::npos)
-        {
-            title = m_automationRenderedText.substr(start, m_automationRenderedText.find_first_of(L"\r\n", start) - start);
-            auto end = title.find_last_not_of(L" \t");
-            if (end != std::wstring::npos) title.resize(end + 1);
-            titleSource = L"rendered";
-        }
-    }
     Put(test, L"title", title);
-    Put(test, L"titleSource", titleSource);
+    Put(test, L"titleSource", L"definition");
     Put(test, L"displayedText", m_automationRenderedText);
     state.SetNamedValue(L"test", test);
     auto settings = AutomationSettings();

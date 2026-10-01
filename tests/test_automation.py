@@ -137,6 +137,23 @@ class AutomationTests(unittest.TestCase):
                         self.assertEqual(state["settings"]["color"], color)
                         self.assertEqual(state["settings"]["textVisible"], visible)
 
+    def test_all_titles_use_definitions_with_text_on_and_off(self):
+        tests = self.client.request("catalog")["catalog"]["tests"]
+        for test in tests:
+            for visible in (True, False):
+                with self.subTest(test=test["id"], textVisible=visible):
+                    state = self.state(test=test["id"], settings={"textVisible": visible,
+                                       "color": "Blue", "dimmingMode": "2D", "fullscreen": False})
+                    expected = test["title"]
+                    if test["id"] in ("ColorPatches", "ColorPatchesFull", "ColorPatchesMAX"):
+                        expected = expected.replace("Red", "Blue")
+                    elif test["id"] == "LocalDimmingContrast":
+                        expected += "  2-D"
+                    elif test["id"] in ("FlashTest", "FlashTestMAX"):
+                        expected = expected[:-3] + ("On" if state["timing"]["flashOn"] else "Off")
+                    self.assertEqual(state["test"]["title"], expected)
+                    self.assertEqual(state["test"]["titleSource"], "definition")
+
     def test_requested_examples(self):
         state = self.state(test="ActiveDimming", settings={"nits": 49.79, "textVisible": True}, id="nits-example")
         self.assertEqual(state["test"]["title"], "5.1 Active Dimming")
