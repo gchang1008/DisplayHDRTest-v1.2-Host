@@ -124,3 +124,27 @@ python -m unittest discover -s tests -p 'test_*.py' -v
 工作區根目錄的 `build-output/test-results.txt`、`render-regression-results.txt` 與各建置目錄的 `build.log` 保存本次結果。測試副本位於 `%LOCALAPPDATA%/DisplayHDRAutomationBuild`，不加入 Git。原始碼內只追蹤工具、測試與文件。
 
 重現本輪追加驗證：先建置 `tools/build-probe.ps1`（原版加 `-Baseline`），再執行 `python tests/run_live_benchmark.py`；動態／故障配對使用 `test_timing_regression.py`。`run_live_stability.py` 會啟動專用正式版本，`run_live_faults.py PID` 連接指定實例，均會切換圖樣。
+
+## 遠端 HTTP 實作驗證（2026-10-01）
+
+本輪新增 Python HTTP 服務、遠端客戶端及單一啟動入口，沒有修改或重新編譯 C++ 核心。HTTP 正文原樣交由既有控制邏輯驗證與套用，回覆沿用原有狀態快照。
+
+- 17 項 HTTP 測試通過；先以真實 Named Pipe 測試副本執行，再連接正式 x64 Release 執行檔驗收。涵蓋全部 47 個圖樣與 25 個持續設定、RGBW、49.79 Nits、字幕／文字、原子驗證、初始化、倒數、自動更新與識別值。
+- 新增網路故障測試：無效 JSON／UTF-8／正文型別／路由／方法／大小／Content-Type、未完整正文的絕對逾時、完整指令送出後斷線、橋接逾時／中斷的錯誤回覆、不得自動重送，以及服務停止後狀態保留。
+- 部分橋接故障以測試替身注入；正文與斷線測試使用真正 TCP，正常控制使用真正 C++ Named Pipe。
+- 實際 `StartDisplayHDR.cmd` 從 UNC 輸出目錄成功啟動，設定主機 IP `192.168.1.107:8765`；同機呼叫該 IP 切換與查詢成功。DisplayHDR 正常關閉後服務退出碼為 0；連接埠占用時，服務在建立新的 DisplayHDR 程序前回報錯誤。
+- Python 驗收版本為 3.13.5；正式原有執行檔及資源未改動，只有加入部署腳本。
+
+### HTTP 查詢對核心效能的影響
+
+使用前輪相同的硬體探針副本與門檻。原版與修改版持續 HTTP 查詢，各以 Flash／Subtitle Flicker 比較兩輪，第二輪反轉順序；共 8 次，每次 20 秒，排除起始兩秒。探針保留真實 GPU、視窗、原有計時與 Present；客戶端與服務在同一電腦以 TCP 呼叫，沒有背景建置／測試作業重疊。
+
+兩組彙整皆通過：Flash 中位數與 p95 增量皆約 0 ms；Subtitle Flicker 中位數增量約 0.31 ms、p95 增量約 -0.21 ms；兩者慢畫格比例增量皆 0。DisplayHDR 程序 CPU 最大增量約 0.023 個核心，未量測 Python 服務的 CPU 使用量。門檻仍為中位數 ≤1 ms、p95 ≤2 ms、慢畫格比例增量 ≤1 個百分點及 DisplayHDR CPU 增量 ≤0.1 個核心。
+
+證據：`build-output/remote-test-results.log`、`remote-live-tests.log`、`remote-packaged-launch.log`、`remote-port-conflict.log`、`remote-lan-dimming.json`、`remote-lan-subtitle.json`，及 `behavior-verification/remote-benchmark-results.json`、`remote-benchmark-comparisons.json`、`remote-*.csv`。
+
+跨電腦的實際連線、防火牆及網路故障尚未驗收；需要第二台 Windows 電腦執行 `Remote_API.md` 的客戶端範例。同機使用主機 IP 不等於完成這項驗收。兩版本原有共通故障仍屬既有／共通問題，不歸類為遠端 API 引入的回歸。
+
+封裝入口驗收曾重現 Windows 的同連接埠重複綁定；現已以 `SO_EXCLUSIVEADDRUSE` 修正並新增占用測試，第二次啟動回報 `WinError 10048`，不會啟動第二個 DisplayHDR。此行為及排他綁定方式依 [Microsoft Winsock 文件](https://learn.microsoft.com/en-us/windows/win32/winsock/using-so-reuseaddr-and-so-exclusiveaddruse) 核對。沒有修改 C++ 核心。
+
+最終完整套件共 31 項通過，94.295 秒；原有 HDR／SDR 共 320 組靜態圖樣／metadata 及 1,710 個動態狀態／像素檢查點仍一致。日誌：`build-output/remote-full-suite.log`。部署腳本與來源逐位元相符，證據：`build-output/remote-deployment-check.json`。

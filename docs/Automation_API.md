@@ -4,7 +4,7 @@
 
 以 `DisplayHDRComplianceTests.exe --api` 啟動。未加 `--api` 時不建立控制介面，原有鍵盤操作保留。
 
-介面使用 Windows 本機 Named Pipe：`\\.\pipe\DisplayHDRTest-v1.2-<PID>`。每個程式實例使用自己的處理程序識別碼。此 API 不提供 HTTP 或遠端存取。
+本機介面使用 Windows Named Pipe：`\\.\pipe\DisplayHDRTest-v1.2-<PID>`。每個程式實例使用自己的處理程序識別碼。另一台電腦透過新增的 HTTP 服務控制，啟動入口、Python 客戶端及操作方式見 [遠端 API 文件](Remote_API.md)。以下描述本機契約與兩種傳輸共用的設定／狀態語意。
 
 在原始碼目錄執行以下 PowerShell 範例，路徑中的執行檔必須與 `.cso`、`.png` 資源放在同一個目錄：
 

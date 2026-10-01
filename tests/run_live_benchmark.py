@@ -1,5 +1,6 @@
 """Compare identically instrumented, visible hardware builds; no rendering replacements."""
 import csv
+import argparse
 import ctypes
 import json
 import os
@@ -11,6 +12,7 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from displayhdr_api import DisplayHDRClient
+from displayhdr_remote import DisplayHDRRemoteClient
 
 OUT = Path(__file__).resolve().parents[2] / "build-output" / "behavior-verification"
 OUT.mkdir(exist_ok=True)
@@ -43,25 +45,35 @@ def percentile(values, quantile):
     return sorted(values)[int((len(values) - 1) * quantile)]
 
 
-def run(variant, mode, pattern, repeat, duration=20):
+def run(variant, mode, pattern, repeat, duration=20, output_prefix=""):
     label = f"{variant}-{mode}-{pattern}-{repeat}"
     binary = ROOT / f"{variant}-x64-Release/behavior-probe/bin/DisplayHDRComplianceTests.exe"
     environment = os.environ.copy()
-    environment.update(DISPLAYHDR_PROBE_LOG=str(OUT / f"{label}.csv"), DISPLAYHDR_PROBE_SECONDS=str(duration),
+    environment.update(DISPLAYHDR_PROBE_LOG=str(OUT / f"{output_prefix}{label}.csv"), DISPLAYHDR_PROBE_SECONDS=str(duration),
                        DISPLAYHDR_PROBE_PATTERN=str(pattern))
     startup = subprocess.STARTUPINFO()
     startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
     startup.wShowWindow = 1
-    process = subprocess.Popen([str(binary)] + (["--api"] if mode in ("idle", "query") else []),
+    process = subprocess.Popen([str(binary)] + (["--api"] if mode in ("idle", "query", "remote") else []),
                                cwd=binary.parent, env=environment, startupinfo=startup)
     requests = 0
     latencies = []
     samples = []
     client = None
+    bridge = None
     started = time.monotonic()
     try:
         if mode == "query":
             client = DisplayHDRClient(process.pid)
+        elif mode == "remote":
+            with DisplayHDRClient(process.pid) as ready:
+                assert ready.request("catalog")["ok"]
+            bridge = subprocess.Popen([sys.executable, str(Path(__file__).resolve().parents[1] / "tools/displayhdr_server.py"),
+                                       "--pid", str(process.pid), "--host", "127.0.0.1", "--port", "8766"],
+                                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT, creationflags=subprocess.CREATE_NO_WINDOW)
+            if not bridge.stdout.readline().startswith(b"READY"):
+                raise RuntimeError("HTTP benchmark service failed to start")
+            client = DisplayHDRRemoteClient("http://127.0.0.1:8766")
         while process.poll() is None:
             if time.monotonic() - started > duration + 15:
                 raise TimeoutError(f"{label} did not exit normally")
@@ -74,6 +86,8 @@ def run(variant, mode, pattern, repeat, duration=20):
                         break
                     raise
                 latencies.append((time.perf_counter() - before) * 1000)
+                if not response["ok"] and process.poll() == 0:
+                    break
                 assert response["ok"] and response["state"]["presentation"]["submitted"], response
                 requests += 1
             else:
@@ -83,12 +97,16 @@ def run(variant, mode, pattern, repeat, duration=20):
                 samples.append((time.monotonic(), cpu, private))
         assert process.returncode == 0, (label, process.returncode)
     finally:
-        if client:
+        if isinstance(client, DisplayHDRClient):
             client.close()
+        if bridge:
+            bridge.terminate()
+            bridge.wait(10)
+            bridge.stdout.close()
         if process.poll() is None:
             process.terminate()
             process.wait(10)
-    rows = list(csv.DictReader((OUT / f"{label}.csv").open()))
+    rows = list(csv.DictReader((OUT / f"{output_prefix}{label}.csv").open()))
     rows = [r for r in rows if float(r["qpc"]) - float(rows[0]["qpc"]) > 2]
     periods = [(float(b["qpc"]) - float(a["qpc"])) * 1000 for a, b in zip(rows, rows[1:])]
     assert len(periods) > 100, label
@@ -104,19 +122,23 @@ def run(variant, mode, pattern, repeat, duration=20):
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--remote", action="store_true", help="Compare baseline with continuous HTTP queries.")
+    args = parser.parse_args()
+    prefix = "remote-" if args.remote else ""
     results = []
     for repeat in range(2):
         for pattern in (8, 25):  # FlashTest / SubTitleFlicker (verify ids against Game.h)
-            variants = [("baseline", "off"), ("automation", "off"), ("automation", "idle"), ("automation", "query")]
+            variants = [("baseline", "off"), ("automation", "remote")] if args.remote else [("baseline", "off"), ("automation", "off"), ("automation", "idle"), ("automation", "query")]
             if repeat:
                 variants.reverse()
             for variant, mode in variants:
-                results.append(run(variant, mode, pattern, repeat))
-                (OUT / "benchmark-results.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
+                results.append(run(variant, mode, pattern, repeat, output_prefix=prefix))
+                (OUT / f"{prefix}benchmark-results.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
     comparisons = []
     for pattern in (8, 25):
         base = [r for r in results if r["label"].startswith(f"baseline-off-{pattern}-")]
-        for mode in ("off", "idle", "query"):
+        for mode in (("remote",) if args.remote else ("off", "idle", "query")):
             current = [r for r in results if r["label"].startswith(f"automation-{mode}-{pattern}-")]
             metrics = {}
             for key in ("medianMs", "p95Ms", "slowFrameFraction", "cpuCores"):
@@ -124,7 +146,7 @@ if __name__ == "__main__":
             passed = (metrics["medianMs"] <= 1 and metrics["p95Ms"] <= 2
                       and metrics["slowFrameFraction"] <= .01 and metrics["cpuCores"] <= .1)
             comparisons.append(dict(pattern=pattern, mode=mode, difference=metrics, passed=passed))
-    (OUT / "benchmark-comparisons.json").write_text(json.dumps(comparisons, indent=2), encoding="utf-8")
+    (OUT / f"{prefix}benchmark-comparisons.json").write_text(json.dumps(comparisons, indent=2), encoding="utf-8")
     print(json.dumps(comparisons, indent=2), flush=True)
     if not all(c["passed"] for c in comparisons):
         raise SystemExit(1)
