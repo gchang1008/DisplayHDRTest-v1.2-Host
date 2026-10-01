@@ -36,3 +36,6 @@
 /SineSweepEffect.cso
 /BandedGradientEffect.cso
 /BackgroundNoiseEffect.cso
+
+/build-output/
+/dist/

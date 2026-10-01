@@ -60,7 +60,7 @@ class RegressionTests(unittest.TestCase):
                     self.assertEqual(len(outputs[0]), len(outputs[index]))
                     self.assertEqual(differences, [])
             reports.append(f"{mode}: {len(outputs[0])} paired renders match (API disabled and enabled).")
-        report = REPO.parent / "build-output" / "render-regression-results.txt"
+        report = REPO / "build-output" / "render-regression-results.txt"
         report.write_text("\n".join(reports) + "\n", encoding="utf-8")
         print("\n".join(reports))
 

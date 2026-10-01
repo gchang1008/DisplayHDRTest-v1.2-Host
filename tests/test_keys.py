@@ -6,7 +6,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import test_automation
-from displayhdr_remote import DisplayHDRRemoteClient
+from http_client import HttpClient as DisplayHDRRemoteClient
 from displayhdr_server import create_server
 
 

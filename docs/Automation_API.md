@@ -9,7 +9,7 @@
 在原始碼目錄執行以下 PowerShell 範例，路徑中的執行檔必須與 `.cso`、`.png` 資源放在同一個目錄：
 
 ```powershell
-$displayHdrProcess = Start-Process -FilePath '..\build-output\automation-x64-Release\DisplayHDRComplianceTests.exe' -ArgumentList '--api' -PassThru
+$displayHdrProcess = Start-Process -FilePath 'build-output\automation-x64-Release\DisplayHDRComplianceTests.exe' -ArgumentList '--api' -PassThru
 python tools/displayhdr_api.py --pid $displayHdrProcess.Id --command catalog
 python tools/displayhdr_api.py --pid $displayHdrProcess.Id --command set_state --test ColorPatchesFull --settings '{"color":"Blue","textVisible":false}'
 python tools/displayhdr_api.py --pid $displayHdrProcess.Id
@@ -161,7 +161,7 @@ with DisplayHDRClient(pid) as api:
 
 ## 建置
 
-以 Visual Studio 2022 的 MSBuild、MSVC v142、Windows SDK 建置原有專案。`tools/build.ps1` 會在本機暫存目錄建置，避開 UNC 路徑的 manifest 工具限制，再將執行檔與資源複製至工作區根目錄的 `build-output`。
+以 Visual Studio 2022 的 MSBuild、MSVC v142、Windows SDK 建置原有專案。`tools/build.ps1` 會在本機暫存目錄建置，避開 UNC 路徑的 manifest 工具限制，再將執行檔與資源複製至本儲存庫的 `build-output`。
 
 ```powershell
 powershell -NoProfile -File tools/build.ps1 -Configuration Release -Platform x64

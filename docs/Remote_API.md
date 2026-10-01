@@ -23,7 +23,8 @@ Client 新增 GUI 遙控器，雙擊 `StartDisplayHDRClient.cmd`，輸入 Host I
 - `StartDisplayHDR.cmd`
 - `displayhdr_server.py`
 - `displayhdr_api.py`
-- `displayhdr_remote.py`
+
+`displayhdr_remote.py` 與 GUI 已拆至 [Client 獨立專案](https://github.com/gchang1008/DisplayHDR-Client)，不隨 Host 原始碼或 Host ZIP 提供。
 
 Windows 防火牆須允許控制端連入所選 TCP 連接埠。啟動工具不會自動修改防火牆。依確認需求，本版不提供身分驗證或 HTTPS。
 

@@ -45,6 +45,6 @@ for index in range(25):
         client._transfer(payload, False, time.monotonic()+5)
     reconnect()
 checks.append("25 disconnects before receiving response; reconnect state intact")
-output=Path(__file__).resolve().parents[2]/"build-output/behavior-verification/live-fault-results.json"
+output=Path(__file__).resolve().parents[1]/"build-output/behavior-verification/live-fault-results.json"
 output.write_text(json.dumps({"passed":True,"checks":checks},indent=2), encoding="utf-8")
 print(json.dumps(checks,indent=2))

@@ -1,55 +1,19 @@
-# DisplayHDR 可攜式整合包
+# DisplayHDR Host 可攜式整合包
 
-## 部署
+適用 Windows 10／11 x64。完整解壓 DisplayHDR_Host_x64.zip，執行 StartDisplayHDR.cmd，看到 READY 後可接受控制。Python runtime、執行檔、shader 與 PNG 已附，不需另裝 Python／Visual C++ 執行環境。
 
-兩份 ZIP 適用 Windows 10／11 x64。完整解壓縮後即可執行，不需要安裝 Python、Visual Studio、Visual C++ Redistributable 或其他 Python 套件。每份整合包包含自己的 `runtime`，不要只複製啟動檔或刪除 runtime。
+預設全部 IPv4 介面 TCP 8765。Windows 防火牆須允許控制端連入；HDR 測試仍需開啟 Windows HDR 並使用適當顯示驅動。沒有身分驗證或 HTTPS。
 
-- 待測系統：解壓 `DisplayHDR_Host_x64.zip`，執行 `StartDisplayHDR.cmd`。
-- 控制端：解壓 `DisplayHDR_Client_x64.zip`，雙擊 `StartDisplayHDRClient.cmd` 開啟 GUI 遙控器；命令列入口 `ControlDisplayHDR.cmd` 保留。
-
-Host 預設監聽 TCP 8765。待測系統仍需原程式所需的 Windows 顯示功能與顯示驅動；HDR 測試需開啟 Windows HDR。控制端須能連入 Host 的所選連接埠。這些是作業系統／網路條件，不是額外安裝的程式依賴。
-
-## Host 啟動
-
-雙擊 `StartDisplayHDR.cmd`，看到 `READY` 後可接受控制。也可在解壓目錄的 PowerShell 指定監聽位址與連接埠：
+指定監聽位址：
 
 ```powershell
 .\StartDisplayHDR.cmd --host 192.168.1.107 --port 8765
 ```
 
-IP 請以待測系統實際位址為準。DisplayHDR 視窗關閉後，服務自動退出。原有鍵盤功能保留；控制端斷線不修改畫面或設定，動畫與倒數照原流程繼續。
+IP 以 Host 實際位址為準；同機 Client 可使用 127.0.0.1。關閉 DisplayHDR 後服務自動退出，控制端斷線不修改畫面或設定。
 
-## Client 使用
+Client 遙控器、命令列與 Python Client 由 [獨立儲存庫](https://github.com/gchang1008/DisplayHDR-Client) 提供，請搭配支援 key 指令的版本。API 文件見 Remote_API.md 與 Automation_API.md。
 
-GUI：雙擊 `StartDisplayHDRClient.cmd`，輸入 Host IP 與連接埠，按「連線／重新查詢」。詳細操作見 Client 包內 `GUI_Remote.md`。遙控器需搭配同批新版 Host。
+開發端從 Host 原始碼執行 tools/build.ps1 建立 x64 Release，再執行 python tools/package.py。輸出為本專案 dist/DisplayHDR_Host_x64.zip 與 SHA256SUMS.txt；不依賴 Client 原始碼或 Qt。
 
-在 Client 解壓目錄開啟 PowerShell，指定 Host IP：
-
-```powershell
-.\ControlDisplayHDR.cmd --url http://192.168.1.107:8765 --command catalog
-.\ControlDisplayHDR.cmd --url http://192.168.1.107:8765 --command set_state --test ColorPatchesFull
-.\ControlDisplayHDR.cmd --url http://192.168.1.107:8765
-```
-
-需要提供 JSON 設定時，可直接使用包內執行環境；這個指令不使用或安裝系統 Python：
-
-```powershell
-.\runtime\python.exe -X utf8 displayhdr_remote.py --url http://192.168.1.107:8765 --command set_state --test ColorPatchesFull --settings '{"color":"Blue","textVisible":false}'
-```
-
-自動化程式可放在 Client 解壓目錄，使用包內 Python 執行：
-
-```powershell
-.\runtime\python.exe -X utf8 automation.py
-```
-
-`automation.py` 可匯入同目錄的 `displayhdr_remote.DisplayHDRRemoteClient`，整合範例與設定語意見 `Remote_API.md`。這份 runtime 提供 Python 標準函式庫；Client 另附 GUI 所需的 PySide6／Qt。使用者另外加入的第三方量測設備套件不屬於本包內容。
-
-## 驗證與授權檔
-
-- `manifest.json` 記錄包內各檔 SHA-256；ZIP 外的 `SHA256SUMS.txt` 記錄兩份 ZIP 的 SHA-256。
-- `LICENSE-DisplayHDR.txt` 保留原專案授權；`runtime/LICENSE.txt` 保留 Python 及其隨附元件授權。
-- 使用 [Python 官方可嵌入發行版](https://docs.python.org/3.13/using/windows.html#the-embeddable-package)，來源及 SHA-256 固定於打包工具。runtime 不讀取系統 Python 安裝或第三方 site-packages，不修改登錄檔與系統 PATH。
-- Client GUI 授權與元件來源見 `Qt_Notices.md`。
-
-建置端可由原始碼目錄執行 `python tools/package.py` 重建 ZIP。第一次建置會下載官方 runtime，部署後執行不需要下載依賴。
+manifest.json 記錄包內各檔 SHA-256。保留 LICENSE-DisplayHDR.txt、runtime/LICENSE.txt 與官方 Python runtime 來源；勿刪除 runtime 或分開搬移必要資源。

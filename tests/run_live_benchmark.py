@@ -12,9 +12,9 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from displayhdr_api import DisplayHDRClient
-from displayhdr_remote import DisplayHDRRemoteClient
+from http_client import HttpClient as DisplayHDRRemoteClient
 
-OUT = Path(__file__).resolve().parents[2] / "build-output" / "behavior-verification"
+OUT = Path(__file__).resolve().parents[1] / "build-output" / "behavior-verification"
 OUT.mkdir(exist_ok=True)
 ROOT = Path(os.environ["LOCALAPPDATA"]) / "DisplayHDRAutomationBuild"
 kernel = ctypes.WinDLL("kernel32", use_last_error=True)

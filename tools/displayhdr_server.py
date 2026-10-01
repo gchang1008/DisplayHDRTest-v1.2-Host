@@ -118,7 +118,7 @@ def create_server(host, port, pid, pipe_timeout=5, body_timeout=5):
 
 def main():
     adjacent = Path(__file__).resolve().parent / "DisplayHDRComplianceTests.exe"
-    default_exe = adjacent if adjacent.exists() else Path(__file__).resolve().parents[2] / "build-output/automation-x64-Release/DisplayHDRComplianceTests.exe"
+    default_exe = adjacent if adjacent.exists() else Path(__file__).resolve().parents[1] / "build-output/automation-x64-Release/DisplayHDRComplianceTests.exe"
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--exe", type=Path, default=default_exe)
     parser.add_argument("--host", default="0.0.0.0")

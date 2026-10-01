@@ -13,7 +13,7 @@ from run_live_benchmark import resources, OUT
 
 kernel = ctypes.WinDLL("kernel32", use_last_error=True)
 kernel.GetProcessHandleCount.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
-binary = Path(__file__).resolve().parents[2] / "build-output/automation-x64-Release/DisplayHDRComplianceTests.exe"
+binary = Path(__file__).resolve().parents[1] / "build-output/automation-x64-Release/DisplayHDRComplianceTests.exe"
 startup = subprocess.STARTUPINFO()
 startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
 startup.wShowWindow = 1

@@ -28,7 +28,7 @@ class TimingRegression(unittest.TestCase):
             self.assertEqual(results[0], results[1], mode + " API off")
             self.assertEqual(results[0], results[2], mode + " API on")
             reports.append(f"{mode}: {len(results[0])} dynamic state/pixel snapshots match across three variants.")
-        output = Path(__file__).resolve().parents[2] / "build-output/behavior-verification/dynamic-results.txt"
+        output = Path(__file__).resolve().parents[1] / "build-output/behavior-verification/dynamic-results.txt"
         output.parent.mkdir(exist_ok=True)
         output.write_text("\n".join(reports) + "\n", encoding="utf-8")
         print("\n".join(reports))
@@ -57,7 +57,7 @@ class TimingRegression(unittest.TestCase):
                 for index in (2, 4, 5):
                     self.assertEqual(original, results[0][1][offset + index].split()[1:])
             import json
-            output = Path(__file__).resolve().parents[2] / "build-output/behavior-verification" / f"fault-{mode}.json"
+            output = Path(__file__).resolve().parents[1] / "build-output/behavior-verification" / f"fault-{mode}.json"
             output.write_text(json.dumps({"equivalent": True, "recoveryPassed": False,
                 "exitCode": results[0][0], "snapshots": [line.decode() for line in results[0][1]],
                 "knownIssue": "AnimatedColorGradient after fourth device rebuild: all three variants access violation"}, indent=2), encoding="utf-8")
