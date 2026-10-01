@@ -110,6 +110,11 @@ class RemoteTests(test_automation.AutomationTests):
                 self.assertEqual(response["id"], "uncertain")
                 self.assertTrue(response["error"]["requestMayHaveApplied"])
                 pipe.assert_called_once()
+        with patch("displayhdr_server.DisplayHDRClient", side_effect=TimeoutError("key timeout")) as pipe:
+            code, response = self.raw(json.dumps({"version": 1, "id": "uncertain-key", "command": "key", "key": "Up"}).encode())
+            self.assertEqual(code, 504)
+            self.assertTrue(response["error"]["requestMayHaveApplied"])
+            pipe.assert_called_once()
         self.assertTrue(self.client.request()["ok"])
 
     def test_port_conflict_is_rejected(self):

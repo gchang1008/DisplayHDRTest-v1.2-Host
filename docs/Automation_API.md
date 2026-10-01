@@ -21,7 +21,7 @@ Python 客戶端只使用標準函式庫，適用 Windows；不同控制端可�
 
 - UTF-8 JSON，一行一個物件，以換行字元 `\n` 結束。
 - `version` 必須為 `1`；`id` 使用字串，最長 128 字元，建議每次請求使用唯一值。回覆原樣帶回。
-- 指令為 `catalog`、`get_state`、`set_state`。
+- 指令為 `catalog`、`get_state`、`set_state`、`key`。
 - 請求最大 16 KiB。服務端同時接受一個連線，逐一處理請求，限制一個待處理請求。
 - 讀寫／閒置逾時 10 秒，等待主執行緒完成請求逾時 5 秒；逾時會斷線。控制端可另設定較短逾時。
 - 未知欄位、錯誤型別、超出範圍的值會被拒絕。整份設定驗證成功後才套用，無效請求不造成部分變更。
@@ -43,6 +43,24 @@ Python 客戶端只使用標準函式庫，適用 Windows；不同控制端可�
 逾時或斷線後，指令**可能已經生效**。重新連線，以 `get_state` 比對 `lastSetRequestId` 及完整設定後再決定是否重送；不要直接重送帶有 `restart:true` 的請求。
 
 ## 測試識別值與設定清單
+
+### 原版按鍵操作
+
+GUI 遙控器使用新增的 `key` 指令，例如：
+
+```json
+{"version":1,"id":"key-1","command":"key","key":"Down"}
+{"version":1,"id":"key-2","command":"key","key":"Shift+Up"}
+{"version":1,"id":"key-3","command":"key","key":"Shift+4"}
+```
+
+支援 `Up`, `Down`, `Left`, `Right`, `PageUp`, `PageDown`, `Space`, `Control`, `C`, `Home`, `P`, `Pause`, `A`, `Period`, `Comma`, `Plus`, `Minus`, `LeftBracket`, `RightBracket`, `Escape`, `AltEnter` 與 `0`–`9`。可加 `Shift+` 前綴，沿用原版 Shift 語意；Shift＋6–9 不切換測試。未支援的名稱／型別／額外欄位會在任何操作前拒絕。
+
+每次請求代表一次按鍵操作，呼叫原版處理函式；不向系統注入鍵盤事件，不依賴 Host 視窗焦點。操作在原版 Update 開始前執行，回覆等到該次 Update／Render／Present 嘗試完成，格式與 set_state 相同，lastSetRequestId 記錄本次操作識別值。遠端 Shift 僅作用於本次操作，結束後保留本地 Shift 狀態。
+
+相對操作不可安全重送，逾時後必須先查詢確認。無作用的按鍵仍成功回覆當前狀態；適用範圍、循環、步進、暫停及 Cooldown 特殊行為完全沿用原版函式。上下長按由 Client 依序送出個別請求。
+
+### 指定測試與設定
 
 `catalog.tests` 列出全部 47 個測試畫面，每個項目具有穩定的 `id`、原始標題定義與 `applicableSettings`。請使用 `id` 切換，不使用標題或顯示順序。8% 色塊為 `ColorPatches`，全畫面色塊為 `ColorPatchesFull`。
 

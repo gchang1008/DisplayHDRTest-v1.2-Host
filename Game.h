@@ -187,11 +187,13 @@ public:
     winrt::Windows::Data::Json::JsonObject AutomationCatalog();
     winrt::Windows::Data::Json::JsonObject AutomationState();
     void QueueAutomationState(winrt::Windows::Data::Json::JsonObject const& request, std::wstring const& id);
+    void QueueAutomationKey(winrt::Windows::Data::Json::JsonObject const& request, std::wstring const& id);
     bool AutomationPending() const { return m_automationPending != nullptr; }
 
 private:
     winrt::Windows::Data::Json::JsonObject AutomationSettings();
     void BeginAutomationUpdate();
+    void ApplyAutomationKey();
     void ApplyAutomationSettings();
     void TrackAutomationPresentation();
     int AutomationProfileMaximum() const;
@@ -214,6 +216,7 @@ private:
     std::array<double, 32> m_automationFingerprint{};
     bool m_automationTracked = false;
     std::wstring m_automationRequestId, m_automationLastRequestId;
+    std::wstring m_automationKey;
 
     void ConstructorInternal();
 

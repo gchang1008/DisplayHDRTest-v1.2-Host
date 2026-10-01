@@ -210,9 +210,72 @@ void Game::QueueAutomationState(JsonObject const& request, std::wstring const& i
     m_automationPending = values;
 }
 
+void Game::QueueAutomationKey(JsonObject const& request, std::wstring const& id)
+{
+    Require(!m_automationPending, "A state change is already pending.");
+    Require(request.HasKey(L"key"), "Missing key.");
+    auto key = String(request.GetNamedValue(L"key"));
+    bool shift = key.compare(0, 6, L"Shift+") == 0;
+    if (shift) key = key.substr(6);
+    bool digit = key.size() == 1 && key[0] >= L'0' && key[0] <= L'9';
+    wchar_t const* allowed[] = { L"Up", L"Down", L"Left", L"Right", L"PageUp", L"PageDown",
+        L"Space", L"Home", L"Control", L"C", L"P", L"Pause", L"A", L"Period", L"Comma",
+        L"Plus", L"Minus", L"LeftBracket", L"RightBracket", L"Escape", L"AltEnter" };
+    if (!digit) Find(key, allowed);
+    m_automationKey = String(request.GetNamedValue(L"key"));
+    m_automationTarget = m_currentTest;
+    m_automationRestart = false;
+    m_automationRequestId = id;
+    m_automationPending = JsonObject();
+}
+
+void Game::ApplyAutomationKey()
+{
+    auto key = m_automationKey;
+    bool shift = key.compare(0, 6, L"Shift+") == 0;
+    if (shift) key = key.substr(6);
+    bool localShift = GetShift();
+    SetShift(shift);
+    bool digit = key.size() == 1 && key[0] >= L'0' && key[0] <= L'9';
+    if (digit)
+    {
+        TestPattern const normal[] = { TestPattern::ConnectionProperties, TestPattern::TenPercentPeak,
+            TestPattern::FlashTest, TestPattern::LongDurationWhite, TestPattern::DualCornerBox,
+            TestPattern::StaticContrastRatio, TestPattern::ColorPatches, TestPattern::BitDepthPrecision,
+            TestPattern::RiseFallTime, TestPattern::ProfileCurve };
+        TestPattern const shifted[] = { TestPattern::ConnectionProperties, TestPattern::LocalDimmingContrast,
+            TestPattern::BlackLevelHDRvsSDR, TestPattern::BlackLevelCrush, TestPattern::SubTitleFlicker,
+            TestPattern::XRiteColors };
+        size_t index = key[0] - L'0';
+        if (!shift) SetTestPattern(normal[index]);
+        else if (index < std::size(shifted)) SetTestPattern(shifted[index]);
+    }
+    else if (key == L"Up" || key == L"Down")
+    {
+        ChangeSubtest(key == L"Up" ? 1 : -1);
+    }
+    else if (key == L"Right" || key == L"PageDown") ChangeTestPattern(true);
+    else if (key == L"Left" || key == L"PageUp") ChangeTestPattern(false);
+    else if (key == L"Space") ToggleInfoTextVisible();
+    else if (key == L"Home") StartTestPattern();
+    else if (key == L"Control") ToggleSubtitle();
+    else if (key == L"C") SetTestPattern(TestPattern::Cooldown);
+    else if (key == L"P" || key == L"Pause") PauseAnimation();
+    else if (key == L"A") ToggleXRitePatchAuto();
+    else if (key == L"Period" || key == L"Comma") ChangeCheckerboard(key == L"Period" ? 1 : -1);
+    else if (key == L"Plus" || key == L"Minus") ChangeXRitePatchDisplayTime(key == L"Plus" ? 1 : -1);
+    else if (key == L"LeftBracket" || key == L"RightBracket") SelectWhiteLevel(key == L"RightBracket" ? 1 : -1);
+    else if (key == L"Escape") m_automationSetFullscreen(false);
+    else if (key == L"AltEnter") m_automationSetFullscreen(!m_automationFullscreen());
+    SetShift(localShift);
+    m_automationTarget = m_currentTest;
+    m_automationKey.clear();
+}
+
 void Game::BeginAutomationUpdate()
 {
     if (!m_automationPending || m_automationBegun) return;
+    if (!m_automationKey.empty()) ApplyAutomationKey();
     if (m_automationPending.HasKey(L"fullscreen"))
         m_automationSetFullscreen(m_automationPending.GetNamedBoolean(L"fullscreen"));
     if (m_currentTest != m_automationTarget || m_automationRestart) SetTestPattern(m_automationTarget);

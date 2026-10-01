@@ -115,12 +115,15 @@ class DisplayHDRClient:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pid", type=int, required=True)
-    parser.add_argument("--command", choices=["catalog", "get_state", "set_state"], default="get_state")
+    parser.add_argument("--command", choices=["catalog", "get_state", "set_state", "key"], default="get_state")
+    parser.add_argument("--key")
     parser.add_argument("--test")
     parser.add_argument("--settings", type=json.loads)
     parser.add_argument("--restart", action="store_true")
     args = parser.parse_args()
     fields = {}
+    if args.key is not None:
+        fields["key"] = args.key
     if args.test is not None:
         fields["test"] = args.test
     if args.settings is not None:

@@ -90,10 +90,10 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(400, failure(identifier, "invalid_request", str(error)))
         except TimeoutError as error:
             self.reply(504, failure(identifier, "bridge_timeout", str(error),
-                                    isinstance(request, dict) and request.get("command") == "set_state"))
+                                    isinstance(request, dict) and request.get("command") in ("set_state", "key")))
         except (OSError, ConnectionError) as error:
             self.reply(502, failure(identifier, "bridge_unavailable", str(error),
-                                    isinstance(request, dict) and request.get("command") == "set_state"))
+                                    isinstance(request, dict) and request.get("command") in ("set_state", "key")))
 
     def log_message(self, *_):
         pass

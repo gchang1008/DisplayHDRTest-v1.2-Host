@@ -185,3 +185,10 @@
 - Host 包含原有 C++ Release 執行檔及完整 shader／PNG；Client 只包含控制程式與其執行環境。部署不需安裝 Python、Visual Studio 或 Visual C++ Redistributable。
 - 3 項封裝測試與包內環境執行的 17 項正式 API 驗收通過。Windows 顯示驅動、HDR 設定與網路可達性維持待測系統本身的必要條件。
 - ZIP 與包內檔案均提供 SHA-256；重建方式為 `python tools/package.py`，部署說明見 `Portable_Packages.md`。
+## GUI 遙控器交付（2026-10-01）
+
+- Client 新增 PySide6／Qt Widgets GUI，支援原版方向鍵、空白鍵、Ctrl、C、Home、P、A、數字／Shift 跳轉與其他設定操作；提供全部測試選單、狀態回讀與鍵盤控制。
+- Host 新增 key 指令，在主執行緒 Update 開始前呼叫原版控制函式，回覆等到 Render／Present 嘗試完成。本地鍵盤與核心 Game.cpp／Main.cpp 沒有修改。
+- 上下長按依序送出操作，忙碌時不積壓；逾時停止操作、不重送，重新查詢後恢復。
+- Host／Client ZIP 已更新，Client 隨附 Qt／Python，保留命令列與 Python API。GUI 操作需配合同批新版 Host。
+- GUI、按鍵與免安裝封裝測試通過；正式 Host 的實機 GUI 控制及 74 組本地／遠端按鍵狀態比對通過。跨第二台電腦的防火牆與網路驗收仍待實際部署。

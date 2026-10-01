@@ -4,6 +4,8 @@
 
 使用可攜式 Host／Client ZIP 時，不需要額外安裝 Python；解壓後的入口會使用包內 runtime。部署與操作見 [可攜式整合包](Portable_Packages.md)。以下 `python` 指令可改用包內 `runtime\python.exe -X utf8`。
 
+Client 新增 GUI 遙控器，雙擊 `StartDisplayHDRClient.cmd`，輸入 Host IP 與連接埠即可操作；見 Client 包內 `GUI_Remote.md`。需搭配同批新版 Host 的 `key` 指令。命令列及 Python 呼叫介面保留。
+
 使用 Windows，安裝 Python 3 並確保 `python` 可在命令列執行。正式 C++ 程式的編譯器及執行檔沒有因 HTTP 介面改變；Python 服務負責將網路指令轉送至既有 Named Pipe。
 
 在 `build-output/automation-x64-Release` 雙擊 `StartDisplayHDR.cmd`。這個入口自動啟動 DisplayHDR（`--api`）及 HTTP 服務，顯示 `READY` 後可接受控制。預設連接埠為 **8765**，監聽本機全部 IPv4 介面。
@@ -91,6 +93,8 @@ assert state["presentation"]["presented"]
 網路服務錯誤沿用 `version`、`id`、`ok:false`、`error`，另包含 `error.requestMayHaveApplied`。502／504 的設定指令會保守標示 `true`，表示必須查詢確認，不代表確實已套用。無法解析請求識別值時 `id` 為空字串。
 
 HTTP 正文接收逾時 5 秒；Named Pipe 連接與每次指令等待各最多 5 秒。Python 遠端客戶端預設 12 秒，可用 `--timeout` 或建構子調整。HTTP 回覆後關閉連線；網路服務依序處理請求，不會阻塞 DisplayHDR 的渲染執行緒。
+
+新增原版操作範例：`python displayhdr_remote.py --url http://192.168.1.107:8765 --command key --key Shift+Up`。`key` 與 `set_state` 都是修改指令，502／504 可能已生效，服務不重送；傳輸正文另允許 `key` 欄位。
 
 完整測試識別值、25 個持續設定、狀態快照與暖機／倒數語意見 [既有 API 契約](Automation_API.md)。HTTP 層保留回覆內容，不重新計算圖樣或 Nits。
 

@@ -149,18 +149,20 @@ void AutomationPipe::Poll(Game& game)
         for (auto const& entry : input)
             Require(entry.Key() == L"id" || entry.Key() == L"version" || entry.Key() == L"command"
                 || (command == L"set_state" && (entry.Key() == L"test" || entry.Key() == L"settings"
-                    || entry.Key() == L"restart")), "Unknown request field.");
+                    || entry.Key() == L"restart"))
+                || (command == L"key" && entry.Key() == L"key"), "Unknown request field.");
         JsonObject response;
         Put(response, L"version", 1.0);
         Put(response, L"id", id);
         Put(response, L"ok", true);
         if (command == L"catalog") response.SetNamedValue(L"catalog", game.AutomationCatalog());
         else if (command == L"get_state") response.SetNamedValue(L"state", game.AutomationState());
-        else if (command == L"set_state")
+        else if (command == L"set_state" || command == L"key")
         {
             if (!request->started)
             {
-                game.QueueAutomationState(input, id);
+                if (command == L"key") game.QueueAutomationKey(input, id);
+                else game.QueueAutomationState(input, id);
                 request->started = true;
                 m_applying = request;
                 return;

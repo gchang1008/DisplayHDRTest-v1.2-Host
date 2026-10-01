@@ -41,12 +41,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--url", required=True, help="http://DISPLAYHDR-PC:8765")
     parser.add_argument("--timeout", type=float, default=12)
-    parser.add_argument("--command", choices=["catalog", "get_state", "set_state"], default="get_state")
+    parser.add_argument("--command", choices=["catalog", "get_state", "set_state", "key"], default="get_state")
+    parser.add_argument("--key")
     parser.add_argument("--test")
     parser.add_argument("--settings", type=json.loads)
     parser.add_argument("--restart", action="store_true")
     args = parser.parse_args()
-    fields = {key: value for key, value in (("test", args.test), ("settings", args.settings)) if value is not None}
+    fields = {key: value for key, value in (("test", args.test), ("settings", args.settings), ("key", args.key)) if value is not None}
     if args.restart:
         fields["restart"] = True
     result = DisplayHDRRemoteClient(args.url, args.timeout).request(args.command, **fields)

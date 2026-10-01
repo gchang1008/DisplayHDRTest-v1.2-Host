@@ -161,3 +161,17 @@ python -m unittest discover -s tests -p 'test_*.py' -v
 證據：`build-output/portable-tests.log`、`portable-live-api-tests.log`、`portable-live-host.log`、`portable-live-client-results.json` 及 `portable-package-build.json`。交付 ZIP 位於工作區 `packages/`，旁附 `SHA256SUMS.txt`；包內含 `manifest.json`。
 
 這是排除系統 Python 與檢查 DLL 來源的測試，並未重新安裝一台乾淨 Windows，也未在第二台電腦實測。Windows 10／11 x64 的系統功能、顯示驅動與 Host HDR 設定仍由目標作業系統提供；不要求額外安裝本程式的 Python／C++ 執行依賴。
+## GUI 遙控器驗證（2026-10-01）
+
+- 正式 x64 Release 與 offscreen harness 重新編譯成功。新增範圍僅為 API key 指令、GUI 與封裝；Game.cpp、Main.cpp、原有按鍵函式、圖樣與 metadata 計算未修改。
+- 4 項遠端按鍵測試通過：數字／Shift 跳轉、方向及 Shift 步進、功能按鍵、無效輸入不變更狀態。
+- 8 項 GUI 測試通過：全部 33 個按鈕、放開觸發、Ctrl 組合防誤動作、輸入焦點、滑鼠及鍵盤長按、不積壓、逾時停用且不重送、請求中關閉。
+- 既有 17 項 HTTP API 回歸測試通過，涵蓋全部 47 個測試、全部持續設定與斷線行為；另確認 key 指令的 bridge 逾時標示 requestMayHaveApplied=true 且只嘗試一次。
+- 5 項封裝驗證通過：完整檔案雜湊、隔離 Python／C Runtime、命令列入口、GUI 的 Qt／Shiboken／MSVC DLL 全部從 Client 包內載入，以及從中文／空白 UNC 路徑執行 GUI 啟動入口並正常關閉。
+- 實際解壓 Host／Client 到中文與空白 UNC 路徑，PATH 僅 Windows System32，PYTHONHOME／PYTHONPATH／QT_PLUGIN_PATH 指向不存在位置。Client 包內 Python 啟動原生 Windows Qt GUI，讀取 47 項測試，成功操作全畫面 RGB、文字、字幕、Cooldown、Home 及 Shift 長按 Active Dimming（450 → 480）；成功讀回與顯示狀態。
+- 正式 Host 同一實例中，以原版 Main.cpp 的 WM_KEYDOWN／WM_KEYUP／WM_SYSKEYDOWN 處理路徑，和遠端 key 操作進行 74 組比對。測試識別值與完整持續設定全部一致，涵蓋原版跳轉、Shift＋6–9 無作用、方向、功能、亮度、X-Rite、棋盤格、白階及全螢幕。
+- 正常關閉待測程式後服務退出。這輪測試腳本曾修正 READY pid 的大小寫解析，以及 Qt 測試等待期間讓 Python 背景工作正常執行的事件迴圈；均非交付程式的故障。
+
+證據：build-output/gui-tests.log、remote-key-tests.log、gui-remote-regression.log、gui-portable-tests.log、gui-live-results.json、gui-native-key.log 與 displayhdr-gui-preview.png。
+
+這輪驗證為同機透過 HTTP 的 Client／Host，尚未使用第二台電腦驗證網路／防火牆，也未使用乾淨重裝系統。按鍵比對檢查程式狀態，沒有新增光學量測；既有圖樣／metadata 與動態回歸證據仍見前文。
