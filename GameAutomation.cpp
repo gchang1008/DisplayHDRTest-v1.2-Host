@@ -41,7 +41,7 @@ namespace
         { Game::TestPattern::BlackLevelHDRvsSDR, L"BlackLevelHDRvsSDR", L"1.2.2 Black Level in HDR vs SDR" },
         { Game::TestPattern::BlackLevelCrush, L"BlackLevelCrush", L"v1.2.3 Black Level Crush Test:" },
         { Game::TestPattern::SubTitleFlicker, L"SubTitleFlicker", L"1.2.4 Subtitle Flicker Test:" },
-        { Game::TestPattern::XRiteColors, L"XRiteColors", L"1.2.5 X-Rite?Colors" },
+        { Game::TestPattern::XRiteColors, L"XRiteColors", L"1.2.5 X-Rite\u2122 Colors" },
         { Game::TestPattern::EndOfMandatoryTests, L"EndOfMandatoryTests", L"This is the end of mandatory test content." },
         { Game::TestPattern::SharpeningFilter, L"SharpeningFilter", L"Fresnel zone plate (sharpening test)" },
         { Game::TestPattern::ToneMapSpike, L"ToneMapSpike", L"ST.2084 Spike (Tone map test)" },

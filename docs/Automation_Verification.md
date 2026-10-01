@@ -193,3 +193,13 @@ python -m unittest discover -s tests -p 'test_*.py' -v
 | `XRiteColors` | `1.2.5 X-Rite?Colors` |
 
 X-Rite 名稱中的問號來自目前原有畫面輸出，本次只使清單一致。程式碼修改僅涉及 `GameAutomation.cpp` 的名稱字串；未修改 `Game.cpp`、測試 ID、設定控制、繪圖或鍵盤處理。這是名稱與切換驗證，沒有重新執行時序或光學驗證。完整快照記錄於 `build-output/title-audit.json`。
+
+
+## 特殊字元顯示修正（2026-10-01）
+
+原有 Game.cpp 的三個字串使用 Windows-1252 的 ©（0xA9）與 ™（0x99），在目前字碼頁 950 的編譯環境會被誤讀。本次僅將這三個字串中的特殊字元改成 Unicode 跳脫寫法，並恢復 API 清單的 `1.2.5 X-Rite™ Colors`；未變更測試計算、圖樣、計時或操作邏輯。前輪把問號當成正確標題的處理已撤回。
+
+- x64 Release 重新編譯成功。
+- `tests/test_unicode.py` 核對編譯後執行檔的三個 UTF-16 字串。
+- 正式程式透過 API 核對 Start Screen 的 `Copyright © VESA`、`Includes Portrait X-Rite™ color technology`，以及 X-Rite 頁面的 `1.2.5 X-Rite™ Colors`，三個字串的 Unicode 碼位均正確。
+- 全部 47 頁的清單名稱與畫面首行／固定前綴核對通過。實機文字驗證腳本為 `build-output/verify_unicode.py`。

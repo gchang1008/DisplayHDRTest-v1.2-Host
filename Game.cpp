@@ -867,8 +867,8 @@ void Game::GenerateTestPattern_StartOfTest(ID2D1DeviceContext2* ctx)
     text << L"ALT-ENTER:	Toggle fullscreen\n";
     text << L"ESCAPE:		Exit fullscreen\n";
     text << L"ALT-F4:		Exit app\n";
-    text << L"\nCopyright © VESA\nLast updated: " << __DATE__;
-    text << L"\nIncludes Portrait X-Rite™ color technology\n";
+    text << L"\nCopyright \u00A9 VESA\nLast updated: " << __DATE__;
+    text << L"\nIncludes Portrait X-Rite\u2122 color technology\n";
 
     RenderText(ctx, m_largeFormat.Get(), text.str(), m_largeTextRect);
 
@@ -4968,7 +4968,7 @@ void Game::GenerateTestPattern_XRiteColors(ID2D1DeviceContext2* ctx)						// v1.
 
 		title << fixed << setprecision(0);
 
-		title << L"1.2.5 X-Rite™ Colors\n";
+		title << L"1.2.5 X-Rite\u2122 Colors\n";
 		title << L"Color#: ";
 		title << setw(3) << XRite[m_currentXRiteIndex].num;
 		title << L"   RxC: ";
