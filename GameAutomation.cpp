@@ -16,7 +16,7 @@ namespace
     struct TestInfo { Game::TestPattern pattern; wchar_t const* id; wchar_t const* title; };
     TestInfo const tests[] = {
         { Game::TestPattern::StartOfTest, L"StartOfTest", L"Home.   Start Screen" },
-        { Game::TestPattern::ConnectionProperties, L"ConnectionProperties", L"Render GPU:" },
+        { Game::TestPattern::ConnectionProperties, L"ConnectionProperties", L"Connection Properties" },
         { Game::TestPattern::PanelCharacteristics, L"PanelCharacteristics", L"Supported PQ Values -" },
         { Game::TestPattern::ResetInstructions, L"ResetInstructions", L"For external displays, use their OSD to reset" },
         { Game::TestPattern::PQLevelsInNits, L"PQLevelsInNits", L"" },
