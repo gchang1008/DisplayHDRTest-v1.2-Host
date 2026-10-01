@@ -6,7 +6,7 @@ which generates the test patterns for DisplayHDR certification.
 
 ## 自動化 Host
 
-本 fork 的 `feature/automation-api` 分支新增本機 Named Pipe 與區域網路 HTTP 控制，保留原版測試圖樣與鍵盤功能。[Client 遙控器](https://github.com/gchang1008/DisplayHDR-Client) 已拆至獨立專案。
+本 fork 的 `feature/automation-api` 分支新增本機 Named Pipe 與區域網路 HTTP 控制，保留原版測試圖樣與鍵盤功能。[Client 遙控器](https://github.com/gchang1008/DisplayHDRTest-v1.2-Client) 已拆至獨立專案。
 
 解壓 Host ZIP 後執行 `StartDisplayHDR.cmd`，預設 TCP 8765。部署端不需安裝 Python；詳見 [部署文件](docs/Portable_Packages.md) 與 [API 契約](docs/Automation_API.md)。
 

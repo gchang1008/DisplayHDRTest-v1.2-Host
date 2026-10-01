@@ -12,7 +12,7 @@
 
 IP 以 Host 實際位址為準；同機 Client 可使用 127.0.0.1。關閉 DisplayHDR 後服務自動退出，控制端斷線不修改畫面或設定。
 
-Client 遙控器、命令列與 Python Client 由 [獨立儲存庫](https://github.com/gchang1008/DisplayHDR-Client) 提供，請搭配支援 key 指令的版本。API 文件見 Remote_API.md 與 Automation_API.md。
+Client 遙控器、命令列與 Python Client 由 [獨立儲存庫](https://github.com/gchang1008/DisplayHDRTest-v1.2-Client) 提供，請搭配支援 key 指令的版本。API 文件見 Remote_API.md 與 Automation_API.md。
 
 開發端從 Host 原始碼執行 tools/build.ps1 建立 x64 Release，再執行 python tools/package.py。輸出為本專案 dist/DisplayHDR_Host_x64.zip 與 SHA256SUMS.txt；不依賴 Client 原始碼或 Qt。
 
