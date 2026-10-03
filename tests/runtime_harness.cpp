@@ -159,7 +159,8 @@ struct RegressionRunner
             {
                 auto key = name.GetString();
                 if (key == L"color" || key == L"checkerboard" || key == L"blackIndex" || key == L"profileIndex"
-                    || key == L"xriteIndex" || key == L"whiteLevel" || key == L"subtitlesVisible" || key == L"dimmingMode")
+                    || key == L"xriteIndex" || key == L"whiteLevel" || key == L"subtitlesVisible" || key == L"dimmingMode"
+                    || key == L"gradient")
                     settings.SetNamedValue(key, current.GetNamedValue(key));
             }
             if (settings.HasKey(L"color")) game.m_currentColor = (game.m_currentColor + 1) % 4;
@@ -170,6 +171,7 @@ struct RegressionRunner
             if (settings.HasKey(L"whiteLevel")) game.m_whiteLevelBracket = (game.m_whiteLevelBracket + 1) % 8;
             if (settings.HasKey(L"subtitlesVisible")) game.m_subtitleVisible = !game.m_subtitleVisible;
             if (settings.HasKey(L"dimmingMode")) game.m_LocalDimmingBars = !game.m_LocalDimmingBars;
+            if (settings.HasKey(L"gradient")) game.m_gradientColor.r += 0.1f;
             request.SetNamedValue(L"settings", settings);
             game.QueueAutomationState(request, L"regression");
             game.BeginAutomationUpdate();
@@ -217,6 +219,8 @@ struct RegressionRunner
             for (int checker = 0; checker < 3; ++checker)
             { game.m_checkerboard = static_cast<Game::Checkerboard>(checker); record(pattern); }
         for (int black = 0; black < 5; ++black) { game.m_currentBlack = black; record(Game::TestPattern::BlackLevelCrush); }
+        for (auto color : { D2D1::ColorF(0.0f, 0.0f, 0.0f), D2D1::ColorF(0.1f, 0.2f, 0.3f), D2D1::ColorF(0.8f, 0.1f, 0.6f) })
+        { game.m_gradientColor = color; record(Game::TestPattern::StaticGradient); }
         for (int subtitle = 0; subtitle < 2; ++subtitle) { game.m_subtitleVisible = subtitle; record(Game::TestPattern::SubTitleFlicker); }
         for (int bars = 0; bars < 2; ++bars) { game.m_LocalDimmingBars = bars; record(Game::TestPattern::LocalDimmingContrast); }
         for (int index : { 0, 1, 42, 97 })

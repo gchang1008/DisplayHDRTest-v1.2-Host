@@ -1,6 +1,7 @@
 """Launch DisplayHDR and serve its local pipe API over HTTP on the LAN."""
 import argparse
 from http.server import BaseHTTPRequestHandler, HTTPServer
+import io
 import json
 from pathlib import Path
 import socket
@@ -16,12 +17,41 @@ def failure(identifier, code, message, uncertain=False):
             "error": {"code": code, "message": message, "requestMayHaveApplied": uncertain}}
 
 
+class DeadlineReader(io.RawIOBase):
+    def __init__(self, raw, connection, deadline):
+        self.raw, self.connection, self.deadline = raw, connection, deadline
+
+    def readable(self):
+        return True
+
+    def readinto(self, buffer):
+        if self.deadline is not None:
+            remaining = self.deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("Request headers timed out; no command forwarded.")
+            self.connection.settimeout(remaining)
+        return self.raw.readinto(buffer)
+
+    def close(self):
+        self.raw.close()
+        super().close()
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def setup(self):
         super().setup()
         self.connection.settimeout(self.server.body_timeout)
+        self.header_reader = DeadlineReader(self.rfile.detach(), self.connection,
+                                            time.monotonic() + self.server.body_timeout)
+        self.rfile = io.BufferedReader(self.header_reader)
+
+    def parse_request(self):
+        try:
+            return super().parse_request()
+        finally:
+            self.header_reader.deadline = None
 
     def reply(self, status, value):
         data = json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8")

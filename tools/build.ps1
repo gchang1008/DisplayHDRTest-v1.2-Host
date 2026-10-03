@@ -30,7 +30,7 @@ if ($LASTEXITCODE -ne 0) { throw "Build failed. See $log" }
 Get-ChildItem -LiteralPath $localOut -File | Where-Object Extension -In '.exe', '.pdb', '.cso' | Copy-Item -Destination $out -Force
 Get-ChildItem -LiteralPath $stage -File -Filter '*.png' | Copy-Item -Destination $out -Force
 if (-not $Baseline) {
-    foreach ($file in 'displayhdr_api.py', 'displayhdr_server.py', 'StartDisplayHDR.cmd') {
+    foreach ($file in 'displayhdr_api.py', 'displayhdr_server.py', 'displayhdr_supervisor.py', 'StartDisplayHDR.cmd') {
         Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination $out -Force
     }
 }

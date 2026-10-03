@@ -1,8 +1,10 @@
 """Supervisor lifecycle and HTTP control, without modifying the renderer."""
 import http.client
 import json
+import os
 from pathlib import Path
 import sys
+import subprocess
 import threading
 import unittest
 
@@ -101,11 +103,41 @@ class SupervisorTests(unittest.TestCase):
         self.wait_ready()
 
     def test_attached_pid_cannot_be_restarted(self):
-        attached = Supervisor("renderer.exe", pid=999, checker=lambda pid: None)
+        attached = Supervisor("renderer.exe", pid=os.getpid(), checker=lambda pid: None)
         attached.start()
+        self.assertEqual(attached.status()["status"], "ready")
         self.assertFalse(attached.status()["restartSupported"])
         with self.assertRaises(ValueError):
             attached.restart()
+
+    def test_attached_process_exit_updates_status(self):
+        startup = subprocess.STARTUPINFO()
+        startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
+        startup.wShowWindow = 0
+        for code, phase in ((0, "stopped"), (7, "failed"), (259, "failed")):
+            with self.subTest(code=code), subprocess.Popen(
+                    [sys.executable, "-c", "import sys; sys.stdin.readline(); sys.exit(int(sys.argv[1]))", str(code)],
+                    stdin=subprocess.PIPE, startupinfo=startup) as process:
+                attached = Supervisor("renderer.exe", pid=process.pid, checker=lambda pid: None,
+                                      closer=lambda _: self.fail("Attached process must not be closed."))
+                attached.start()
+                self.assertEqual(attached.status()["status"], "ready")
+                process.stdin.write(b"\n")
+                process.stdin.flush()
+                process.wait(timeout=5)
+                status = attached.status()
+                self.assertEqual(status["status"], phase)
+                self.assertEqual(status["pid"], process.pid)
+                self.assertFalse(status["restartSupported"])
+                attached.attached_process.close()
+
+    def test_failed_attached_probe_releases_handle_without_stopping_process(self):
+        attached = Supervisor("renderer.exe", pid=os.getpid(),
+                              checker=lambda pid: (_ for _ in ()).throw(TimeoutError("probe failed")),
+                              closer=lambda _: self.fail("Attached process must not be closed."))
+        attached.start()
+        self.assertEqual(attached.status()["status"], "failed")
+        self.assertIsNone(attached.attached_process)
 
     def test_http_status_and_restart_remain_available(self):
         server = create_server("127.0.0.1", 0, 100)

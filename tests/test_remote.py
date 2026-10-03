@@ -117,6 +117,18 @@ class RemoteTests(test_automation.AutomationTests):
             pipe.assert_called_once()
         self.assertTrue(self.client.request()["ok"])
 
+    def test_partial_headers_activity_does_not_extend_deadline(self):
+        before = self.state(test="ColorPatches", settings={"color": "Blue"})
+        for prefix in (b"POST /api HTTP/1.1", b"POST /api HTTP/1.1\r\nHost: localhost\r\nX-Slow: "):
+            with self.subTest(prefix=prefix):
+                with socket.create_connection(("127.0.0.1", self.server.server_port), timeout=3) as connection:
+                    connection.sendall(prefix)
+                    time.sleep(.12)
+                    connection.sendall(b" ")
+                    connection.settimeout(.15)
+                    self.assertEqual(connection.recv(1), b"")
+                self.assertEqual(self.state()["settings"], before["settings"])
+
     def test_port_conflict_is_rejected(self):
         with self.assertRaises(OSError):
             create_server("127.0.0.1", self.server.server_port, self.server_pid)

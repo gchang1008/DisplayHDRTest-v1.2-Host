@@ -279,6 +279,14 @@ void Game::BeginAutomationUpdate()
     if (m_automationPending.HasKey(L"fullscreen"))
         m_automationSetFullscreen(m_automationPending.GetNamedBoolean(L"fullscreen"));
     if (m_currentTest != m_automationTarget || m_automationRestart) SetTestPattern(m_automationTarget);
+    // Update builds the gradient brush, so its input must be applied first.
+    if (m_automationPending.HasKey(L"gradient"))
+    {
+        auto rgb = m_automationPending.GetNamedObject(L"gradient");
+        m_gradientColor.r = static_cast<float>(rgb.GetNamedNumber(L"r"));
+        m_gradientColor.g = static_cast<float>(rgb.GetNamedNumber(L"g"));
+        m_gradientColor.b = static_cast<float>(rgb.GetNamedNumber(L"b"));
+    }
     m_automationBegun = true;
 }
 
@@ -316,13 +324,6 @@ void Game::ApplyAutomationSettings()
     }
     if (intervalChanged && m_currentTest == TestPattern::XRiteColors)
         m_automationResetXriteTimer = true;
-    if (values.HasKey(L"gradient"))
-    {
-        auto rgb = values.GetNamedObject(L"gradient");
-        m_gradientColor.r = static_cast<float>(rgb.GetNamedNumber(L"r"));
-        m_gradientColor.g = static_cast<float>(rgb.GetNamedNumber(L"g"));
-        m_gradientColor.b = static_cast<float>(rgb.GetNamedNumber(L"b"));
-    }
     for (auto const& field : AutomationFloats()) setFloat(field.key, this->*field.member);
     // Local dimming metadata depends on this subtest, just as with the arrow keys.
     if (values.HasKey(L"dimmingMode"))

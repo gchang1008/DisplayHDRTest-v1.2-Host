@@ -106,7 +106,7 @@ PQ／sRGB 控制值維持原程式浮點型別，允許小數。校正 PQ 的 AP
 
 ## 套用順序與重啟
 
-`set_state` 的 `test`、`settings`、`restart` 均可省略，未指定設定保留原有狀態；原程式切換測試的初始化仍可能改變共用設定，以回覆快照為準。API 指定值於原有 Update 初始化後、Render 前套用。回覆等到這次套用與 Render／Present 嘗試完成。
+`set_state` 的 `test`、`settings`、`restart` 均可省略，未指定設定保留原有狀態；原程式切換測試的初始化仍可能改變共用設定，以回覆快照為準。API 指定值通常於原有 Update 初始化後、Render 前套用；`gradient` 於 Update 前套用，確保筆刷與首幀使用相同的指定值。回覆等到這次套用與 Render／Present 嘗試完成。
 
 指定相同測試不重新啟動。需重新開始暖機／倒數時使用 `restart:true`。重複相同 X-Rite 自動模式及間隔不重設倒數；變更間隔、啟動自動換色或重新進入測試時會套用指定間隔。
 

@@ -25,6 +25,10 @@ class RegressionTests(unittest.TestCase):
             original = subprocess.check_output(["git", "show", f"{BASELINE}:{file}"], cwd=REPO)
             self.assertEqual(original.replace(b"\r\n", b"\n"), (REPO / file).read_bytes().replace(b"\r\n", b"\n"), file)
         original = subprocess.check_output(["git", "show", f"{BASELINE}:Game.cpp"], cwd=REPO).decode("cp1252").replace("\r\n", "\n")
+        # Only the known display literals changed to equivalent Unicode escapes.
+        original = original.replace("Copyright \u00a9 VESA", r"Copyright \u00A9 VESA")
+        original = original.replace("Portrait X-Rite\u2122 color technology", r"Portrait X-Rite\u2122 color technology")
+        original = original.replace("1.2.5 X-Rite\u2122 Colors", r"1.2.5 X-Rite\u2122 Colors")
         current = (REPO / "Game.cpp").read_bytes().decode("cp1252").replace("\r\n", "\n")
         for prefix in ("GenerateTestPattern_", "ChangeSubtest", "ChangeCheckerboard", "Toggle", "PauseAnimation", "SetMetadata"):
             self.assertEqual(functions(original, prefix), functions(current, prefix), prefix)
