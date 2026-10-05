@@ -151,30 +151,28 @@ python -m unittest discover -s tests -p 'test_*.py' -v
 
 ## 免安裝整合包驗證（2026-10-01）
 
-- Host／Client 分別內附官方 Python 3.13.16 Windows x64 embeddable runtime。下載 ZIP 的 SHA-256 與 [Python 官方發行頁](https://www.python.org/downloads/release/python-31316/) 一致，打包工具固定來源與雜湊。
+- Host 內附官方 Python 3.13.16 Windows x64 embeddable runtime。下載 ZIP 的 SHA-256 與 [Python 官方發行頁](https://www.python.org/downloads/release/python-31316/) 一致，打包工具固定來源與雜湊。
 - Host 原有 Release 採 `/MT` 靜態 C Runtime；`dumpbin /dependents` 顯示只依賴 Windows 的 DirectX、WinRT 與系統 DLL。Python 所需 `vcruntime140.dll`、`vcruntime140_1.dll`、`libffi-8.dll` 已隨包提供。
-- 3 項封裝測試通過：ZIP CRC／解壓後所有檔案雜湊、隔離 runtime 與實際 DLL 路徑、Host／Client 啟動入口。
+- 3 項封裝測試通過：ZIP CRC／解壓後所有檔案雜湊、隔離 runtime 與實際 DLL 路徑、Host 啟動入口。
 - 測試解壓路徑包含中文、空白與 UNC。子程序 PATH 只保留 Windows System32，PYTHONHOME／PYTHONPATH 指向不存在位置；runtime `isolated=1`，sys.path 全部位於整合包，指定 C Runtime 與 libffi 實際載入路徑皆位於包內 runtime。
-- 從 Host ZIP 的啟動入口執行正式 DisplayHDR；Client ZIP 成功取得 catalog、指定測試、查詢及切換全畫面藍色。包內 Python 執行的 17 項正式 API 驗收全部通過。
-- 正常關閉 DisplayHDR 後 HTTP 監聽停止；本輪沒有修改 C++ 核心。驗收過程曾發生測試腳本混合編碼輸出錯誤，修正測試輸出後完成控制，並非包內 Host 或 Client 執行失敗。
+- 從 Host ZIP 的啟動入口執行正式 DisplayHDR，透過 API 成功取得 catalog、指定測試、查詢及切換全畫面藍色。包內 Python 執行的 17 項正式 API 驗收全部通過。
+- 正常關閉 DisplayHDR 後 HTTP 監聽停止；本輪沒有修改 C++ 核心。驗收過程曾發生測試腳本混合編碼輸出錯誤，修正測試輸出後完成控制，並非包內 Host 執行失敗。
 
-證據：`build-output/portable-tests.log`、`portable-live-api-tests.log`、`portable-live-host.log`、`portable-live-client-results.json` 及 `portable-package-build.json`。交付 ZIP 位於工作區 `packages/`，旁附 `SHA256SUMS.txt`；包內含 `manifest.json`。
+證據：`build-output/portable-tests.log`、`portable-live-api-tests.log`、`portable-live-host.log` 及 `portable-package-build.json`。交付 ZIP 位於工作區 `packages/`，旁附 `SHA256SUMS.txt`；包內含 `manifest.json`。
 
 這是排除系統 Python 與檢查 DLL 來源的測試，並未重新安裝一台乾淨 Windows，也未在第二台電腦實測。Windows 10／11 x64 的系統功能、顯示驅動與 Host HDR 設定仍由目標作業系統提供；不要求額外安裝本程式的 Python／C++ 執行依賴。
-## GUI 遙控器驗證（2026-10-01）
+## 遠端按鍵 API 驗證（2026-10-01）
 
-- 正式 x64 Release 與 offscreen harness 重新編譯成功。新增範圍僅為 API key 指令、GUI 與封裝；Game.cpp、Main.cpp、原有按鍵函式、圖樣與 metadata 計算未修改。
+- 正式 x64 Release 與 offscreen harness 重新編譯成功。新增範圍為 API key 指令與封裝；Game.cpp、Main.cpp、原有按鍵函式、圖樣與 metadata 計算未修改。
 - 4 項遠端按鍵測試通過：數字／Shift 跳轉、方向及 Shift 步進、功能按鍵、無效輸入不變更狀態。
-- 8 項 GUI 測試通過：全部 33 個按鈕、放開觸發、Ctrl 組合防誤動作、輸入焦點、滑鼠及鍵盤長按、不積壓、逾時停用且不重送、請求中關閉。
 - 既有 17 項 HTTP API 回歸測試通過，涵蓋全部 47 個測試、全部持續設定與斷線行為；另確認 key 指令的 bridge 逾時標示 requestMayHaveApplied=true 且只嘗試一次。
-- 5 項封裝驗證通過：完整檔案雜湊、隔離 Python／C Runtime、命令列入口、GUI 的 Qt／Shiboken／MSVC DLL 全部從 Client 包內載入，以及從中文／空白 UNC 路徑執行 GUI 啟動入口並正常關閉。
-- 實際解壓 Host／Client 到中文與空白 UNC 路徑，PATH 僅 Windows System32，PYTHONHOME／PYTHONPATH／QT_PLUGIN_PATH 指向不存在位置。Client 包內 Python 啟動原生 Windows Qt GUI，讀取 47 項測試，成功操作全畫面 RGB、文字、字幕、Cooldown、Home 及 Shift 長按 Active Dimming（450 → 480）；成功讀回與顯示狀態。
+- 正式 Host 讀取 47 項測試，透過 API 成功操作全畫面 RGB、文字、字幕、Cooldown、Home 及 Shift 長按 Active Dimming（450 → 480），並成功讀回狀態。
 - 正式 Host 同一實例中，以原版 Main.cpp 的 WM_KEYDOWN／WM_KEYUP／WM_SYSKEYDOWN 處理路徑，和遠端 key 操作進行 74 組比對。測試識別值與完整持續設定全部一致，涵蓋原版跳轉、Shift＋6–9 無作用、方向、功能、亮度、X-Rite、棋盤格、白階及全螢幕。
-- 正常關閉待測程式後服務退出。這輪測試腳本曾修正 READY pid 的大小寫解析，以及 Qt 測試等待期間讓 Python 背景工作正常執行的事件迴圈；均非交付程式的故障。
+- 正常關閉待測程式後服務退出。這輪測試腳本曾修正 READY pid 的大小寫解析，並非交付程式的故障。
 
-證據：build-output/gui-tests.log、remote-key-tests.log、gui-remote-regression.log、gui-portable-tests.log、gui-live-results.json、gui-native-key.log 與 displayhdr-gui-preview.png。
+證據：build-output/remote-key-tests.log。
 
-這輪驗證為同機透過 HTTP 的 Client／Host，尚未使用第二台電腦驗證網路／防火牆，也未使用乾淨重裝系統。按鍵比對檢查程式狀態，沒有新增光學量測；既有圖樣／metadata 與動態回歸證據仍見前文。
+這輪驗證為同機透過 HTTP API，尚未使用第二台電腦驗證網路／防火牆，也未使用乾淨重裝系統。按鍵比對檢查程式狀態，沒有新增光學量測；既有圖樣／metadata 與動態回歸證據仍見前文。
 # Host 清單名稱核對（2026-10-01）
 
 使用重新編譯的 x64 Release 執行檔，透過 API 逐一切換全部 47 個頁面並顯示說明文字，核對 `catalog.tests[].title` 與 `test.displayedText` 的第一個非空白行。47 個項目均符合完整標題或不含動態值的固定前綴。RGB 與 Flash 使用啟動預設設定核對，未宣稱固定選單會隨顏色或 On／Off 更新。
@@ -209,4 +207,4 @@ X-Rite 名稱中的問號來自目前原有畫面輸出，本次只使清單一�
 
 修正 API 的隱藏文字標題組合：直接依目前測試及顏色產生標題，不再把清單的預設紅色完整標題與目前顏色重複串接。測試 ID、清單名稱、設定與原有畫面渲染不變。
 
-在重新編譯的正式 x64 Release 程式執行 `test_rgb_titles_match_with_text_on_and_off`，核對 ColorPatches、ColorPatchesFull 與 ColorPatchesMAX，四種 RGBW 顏色及 Text On／Off，共 24 組狀態。所有標題均符合完整預期字串，色彩及文字設定均一致。正式程式啟動驗證入口為 `build-output/verify_rgb_titles.py`；Client 不需修改。
+在重新編譯的正式 x64 Release 程式執行 `test_rgb_titles_match_with_text_on_and_off`，核對 ColorPatches、ColorPatchesFull 與 ColorPatchesMAX，四種 RGBW 顏色及 Text On／Off，共 24 組狀態。所有標題均符合完整預期字串，色彩及文字設定均一致。正式程式啟動驗證入口為 `build-output/verify_rgb_titles.py`。

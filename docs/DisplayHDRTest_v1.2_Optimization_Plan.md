@@ -184,7 +184,7 @@
 
 ## 遠端實作狀態（2026-10-01）
 
-- 已新增 `displayhdr_server.py`、`displayhdr_remote.py` 及 `StartDisplayHDR.cmd`；HTTP 服務及客戶端使用 Python 標準函式庫。
+- 已新增 `displayhdr_server.py` 及 `StartDisplayHDR.cmd`；HTTP 服務使用 Python 標準函式庫。
 - 單一入口自動啟動 C++ DisplayHDR 與 HTTP 服務；關閉 DisplayHDR 視窗後服務正常退出。核心 C++、原有鍵盤及圖樣程式碼未修改。
 - `tools/build.ps1` 會將遠端控制檔案加入修改版輸出目錄；原版輸出不增加這些檔案。
 - 17 項 HTTP 契約／故障測試通過，涵蓋全部 47 個圖樣、25 個設定、請求識別、錯誤原子性、斷線、正文逾時及不自動重送。
@@ -193,14 +193,11 @@
 
 ## 免安裝交付（2026-10-01）
 
-- 已產生 `packages/DisplayHDR_Host_x64.zip` 與 `packages/DisplayHDR_Client_x64.zip`，包含各自的官方 Python 3.13.16 可攜式環境、所需 DLL、啟動入口、使用說明與授權檔。
-- Host 包含原有 C++ Release 執行檔及完整 shader／PNG；Client 只包含控制程式與其執行環境。部署不需安裝 Python、Visual Studio 或 Visual C++ Redistributable。
+- 已產生 `packages/DisplayHDR_Host_x64.zip`，包含官方 Python 3.13.16 可攜式環境、所需 DLL、啟動入口、使用說明與授權檔。
+- Host 包含原有 C++ Release 執行檔及完整 shader／PNG。部署不需安裝 Python、Visual Studio 或 Visual C++ Redistributable。
 - 3 項封裝測試與包內環境執行的 17 項正式 API 驗收通過。Windows 顯示驅動、HDR 設定與網路可達性維持待測系統本身的必要條件。
 - ZIP 與包內檔案均提供 SHA-256；重建方式為 `python tools/package.py`，部署說明見 `Portable_Packages.md`。
-## GUI 遙控器交付（2026-10-01）
+## 遠端按鍵 API 交付（2026-10-01）
 
-- Client 新增 PySide6／Qt Widgets GUI，支援原版方向鍵、空白鍵、Ctrl、C、Home、P、A、數字／Shift 跳轉與其他設定操作；提供全部測試選單、狀態回讀與鍵盤控制。
 - Host 新增 key 指令，在主執行緒 Update 開始前呼叫原版控制函式，回覆等到 Render／Present 嘗試完成。本地鍵盤與核心 Game.cpp／Main.cpp 沒有修改。
-- 上下長按依序送出操作，忙碌時不積壓；逾時停止操作、不重送，重新查詢後恢復。
-- Host／Client ZIP 已更新，Client 隨附 Qt／Python，保留命令列與 Python API。GUI 操作需配合同批新版 Host。
-- GUI、按鍵與免安裝封裝測試通過；正式 Host 的實機 GUI 控制及 74 組本地／遠端按鍵狀態比對通過。跨第二台電腦的防火牆與網路驗收仍待實際部署。
+- 按鍵與免安裝封裝測試通過；正式 Host 的實機 API 控制及 74 組本地／遠端按鍵狀態比對通過。跨第二台電腦的防火牆與網路驗收仍待實際部署。
