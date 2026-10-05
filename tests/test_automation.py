@@ -68,6 +68,20 @@ class AutomationTests(unittest.TestCase):
         self.assertTrue(response["ok"], response)
         return response["state"]
 
+    def test_refresh_is_queried_without_changing_pattern_or_settings(self):
+        for pattern in ("WarmUp", "XRiteColors", "ConnectionProperties"):
+            with self.subTest(pattern=pattern):
+                before = self.state(test=pattern, settings={"textVisible": False})
+                after = self.state()
+                self.assertIn("refreshRateHz", after["display"])
+                refresh = after["display"]["refreshRateHz"]
+                if refresh is not None:
+                    self.assertGreater(refresh, 1)
+                    self.assertEqual(refresh, int(refresh))
+                self.assertEqual(after["test"]["id"], pattern)
+                self.assertEqual(after["settings"], before["settings"])
+                self.assertEqual(after["lastSetRequestId"], before["lastSetRequestId"])
+
     def test_all_tests_selectable(self):
         response = self.client.request("catalog")
         self.assertTrue(response["ok"])

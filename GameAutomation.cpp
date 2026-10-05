@@ -469,6 +469,16 @@ JsonObject Game::AutomationState()
     state.SetNamedValue(L"presentation", presentation);
     Put(display, L"hdr", hdr);
     Put(display, L"brightnessSliderFactor", slider);
+    display.SetNamedValue(L"refreshRateHz", JsonValue::CreateNullValue());
+    MONITORINFOEXW monitor = {};
+    monitor.cbSize = sizeof(monitor);
+    DEVMODEW mode = {};
+    mode.dmSize = sizeof(mode);
+    auto handle = MonitorFromWindow(m_automationWindow, MONITOR_DEFAULTTONULL);
+    if (handle && GetMonitorInfoW(handle, reinterpret_cast<MONITORINFO*>(&monitor))
+        && EnumDisplaySettingsExW(monitor.szDevice, ENUM_CURRENT_SETTINGS, &mode, 0)
+        && (mode.dmFields & DM_DISPLAYFREQUENCY) && mode.dmDisplayFrequency > 1)
+        Put(display, L"refreshRateHz", static_cast<double>(mode.dmDisplayFrequency));
     Put(display, L"backBufferFormat", static_cast<double>(m_deviceResources->GetBackBufferFormat()));
     Put(display, L"width", static_cast<double>(m_modeWidth));
     Put(display, L"height", static_cast<double>(m_modeHeight));

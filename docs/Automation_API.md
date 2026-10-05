@@ -170,3 +170,7 @@ powershell -NoProfile -File tools/build.ps1 -Configuration Release -Platform x64
 ```
 
 驗證範圍與限制見 [驗證報告](Automation_Verification.md)。
+
+### 更新率狀態
+
+`state.display.refreshRateHz` 在每次狀態查詢時，依 Host 視窗所在顯示器的目前模式取得更新率，不需切換圖樣。值為整數 Hz；找不到顯示器、查詢失敗或驅動僅回報預設頻率時為 `null`。此欄位不表示光學量測或實際逐幀更新頻率，也不改變原版 Connection properties 的顯示邏輯。
