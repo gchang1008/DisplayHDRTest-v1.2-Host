@@ -125,7 +125,8 @@ PQ／sRGB 控制值維持原程式浮點型別，允許小數。校正 PQ 的 AP
 | `effective` | 原有換算的 Nits、控制碼、參考白階等；無單一亮度的多色／多階圖樣使用 `null` |
 | `timing` | 原有倒數、等待完成條件及適用的閃爍階段 |
 | `presentation` | 套用、提交、畫格識別值、資源有效性及視窗狀態 |
-| `display` | HDR、尺寸、螢幕原始報告值、亮度滑桿比例、唯讀 back buffer 格式 |
+| `display` | HDR、尺寸、螢幕原始報告值、亮度滑桿比例、目前模式更新率、唯讀 back buffer 格式 |
+| `display.refreshRateHz` | Host 視窗所在顯示器目前模式的整數 Hz；查詢失敗或預設頻率為 `null`，不需切換圖樣 |
 | `metadata` | 原程式計算的 HDR metadata 原始欄位 |
 
 `effective.nits` 是原程式內部的圖樣亮度參數；部分測試畫面會乘上 Windows 亮度滑桿比例，另以 `displayedNits` 回報對應數字。`nitsText` 依 `displayedNits` 格式化為兩位小數（Active Dimming Dark 三位）。控制值保留 float32 精度；精確核對以原始碼值及浮點容差進行，顯示文字以該格式核對。非單一亮度時數值為 `null`、文字為空字串。Flash／Rise-Fall 的 Nits 為亮相參數，當前相位另查 `timing.flashOn`。
@@ -173,4 +174,4 @@ powershell -NoProfile -File tools/build.ps1 -Configuration Release -Platform x64
 
 ### 更新率狀態
 
-`state.display.refreshRateHz` 在每次狀態查詢時，依 Host 視窗所在顯示器的目前模式取得更新率，不需切換圖樣。值為整數 Hz；找不到顯示器、查詢失敗或驅動僅回報預設頻率時為 `null`。此欄位不表示光學量測或實際逐幀更新頻率，也不改變原版 Connection properties 的顯示邏輯。
+自 automation-v0.1.8 起，`state.display.refreshRateHz` 在每次狀態查詢時，依 Host 視窗所在顯示器的目前模式取得更新率，不需切換圖樣。值為整數 Hz；找不到顯示器、查詢失敗或驅動僅回報預設頻率時為 `null`。此欄位不表示光學量測或實際逐幀更新頻率，也不改變原版 Connection properties 的顯示邏輯。

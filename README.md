@@ -2,7 +2,7 @@
 
 這個程式放在**連接待測螢幕的電腦**上，用來顯示不同的 HDR 測試畫面。你可以直接用鍵盤操作，也可以透過遠端 API 控制。
 
-本專案以 [VESA 官方 DisplayHDRTest-v1.2](https://github.com/vesa-org/DisplayHDRTest-v1.2) 為基礎，加入遠端控制、狀態查詢與程式重啟功能。
+本專案以 [VESA 官方 DisplayHDRTest-v1.2](https://github.com/vesa-org/DisplayHDRTest-v1.2) 為基礎，加入遠端控制、狀態查詢與程式重啟功能。自 automation-v0.1.8 起，狀態 API 可直接取得 HDR、亮度滑桿比例及 Host 視窗所在顯示器的目前模式更新率，不需切換圖樣；欄位與限制見 [API 契約](docs/Automation_API.md)。
 
 ## 使用前需要準備什麼？
 

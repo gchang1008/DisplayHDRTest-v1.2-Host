@@ -8,11 +8,20 @@
 
 | 階段 | 目標 | 狀態 |
 | --- | --- | --- |
-| Phase 1 | DisplayHDRTest 程式 API 功能開發 | 目前階段 |
-| Phase 2 | 量測設備程式化控制開發 | 後續階段 |
-| Phase 3 | 將 DisplayHDRTest 控制與量測設備控制整合成自動化量測軟體 | 後續階段 |
+| Phase 1 | DisplayHDRTest 程式 API 功能開發 | 已交付，持續依控制與查詢需求擴充 |
+| Phase 2 | 量測設備程式化控制開發 | API 使用端整合範圍 |
+| Phase 3 | 將 DisplayHDRTest 控制與量測設備控制整合成自動化量測軟體 | API 使用端整合範圍 |
 
-本專案負責 Phase 1 的 DisplayHDRTest API 能力，後續階段透過此介面整合，不將設備控制邏輯加入原版測試核心。
+本專案負責 Phase 1 的 DisplayHDRTest API 能力，Phase 2／3 為 API 使用端的整合工作，不將設備控制邏輯加入原版測試核心。
+
+## 現行交付狀態（2026-10-05）
+
+- automation-v0.1.8 已提供全部 47 個測試與 25 個持續設定的控制及查詢、HTTP 遠端按鍵、程序狀態及明確重啟。
+- 狀態 API 直接回報 HDR、亮度滑桿比例及視窗所在顯示器目前模式的整數 Hz；更新率取不到時為 null，不需切換至 Connection properties。
+- 關閉測試畫面後，啟動入口的 HTTP 服務仍運行，等待明確 restart_host 指令；不自動重啟。
+- 整合包輸出於本儲存庫 dist/DisplayHDR_Host_x64.zip。
+
+以下有日期的實作與驗證段落保留當輪狀態、產物路徑與測試結果；現行操作及契約以 [Remote_API.md](Remote_API.md)、[Automation_API.md](Automation_API.md) 與 [Portable_Packages.md](Portable_Packages.md) 為準。
 
 ## API 用途與後續量測設備整合
 
