@@ -23,6 +23,8 @@
 
 IP 以 Host 實際位址為準；同機呼叫 API 可使用 127.0.0.1。關閉 DisplayHDR 後服務保持運行，可透過 API 要求重啟，控制端斷線不修改畫面或設定。
 
+透過 Restart Host 重啟後，程式會將新 DisplayHDR 視窗帶到前景並置頂，確認無遮擋才回報就緒；失敗顯示原因並保留程序，不會自動再重啟。不指定藍色或其他驗證圖樣。
+
 遠端控制方式見 [Remote_API.md](Remote_API.md)，測試與設定清單見 [Automation_API.md](Automation_API.md)。
 
 開發端從 Host 原始碼執行 tools/build.ps1 建立 x64 Release，再執行 python tools/package.py。輸出為本專案 dist/DisplayHDR_Host_x64.zip 與 SHA256SUMS.txt。

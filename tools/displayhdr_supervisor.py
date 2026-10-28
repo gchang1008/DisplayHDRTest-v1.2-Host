@@ -102,7 +102,8 @@ class Supervisor:
                     "pid": self.process.pid if self.process else self.attached_pid,
                     "restartSupported": self.attached_pid is None, "error": self.error}
 
-    def start(self):
+    def start(self, presenter=None):
+        startup_ready = False
         try:
             if self.attached_pid is None:
                 process = self.launcher(self.exe)
@@ -117,36 +118,41 @@ class Supervisor:
                 process = self.process or self.attached_process
                 if process is not None and process.poll() is not None:
                     raise RuntimeError("DisplayHDR exited during startup.")
+            startup_ready = True
+            if presenter is not None:
+                presenter(pid)
+            with self.lock:
                 self.phase, self.error = "ready", ""
         except Exception as error:
             # A partially started renderer must not survive a failed startup.
-            try:
-                if self.process is not None:
-                    self.closer(self.process)
-                if self.attached_process is not None:
-                    self.attached_process.close()
-                    self.attached_process = None
-            except Exception as close_error:
-                error = RuntimeError(f"{error}; cleanup failed: {close_error}")
+            if not startup_ready:
+                try:
+                    if self.process is not None:
+                        self.closer(self.process)
+                    if self.attached_process is not None:
+                        self.attached_process.close()
+                        self.attached_process = None
+                except Exception as close_error:
+                    error = RuntimeError(f"{error}; cleanup failed: {close_error}")
             with self.lock:
                 self.phase, self.error = "failed", str(error)
 
-    def restart(self):
+    def restart(self, presenter=None):
         with self.lock:
             if self.attached_pid is not None:
                 raise ValueError("Restart is unavailable for an attached PID. Use a managed Host launcher.")
             if self.phase in ("starting", "restarting"):
                 raise ValueError("Host is already starting or restarting.")
             self.phase, self.error = "restarting", ""
-        threading.Thread(target=self._restart, daemon=True).start()
+        threading.Thread(target=self._restart, args=(presenter,), daemon=True).start()
 
-    def _restart(self):
+    def _restart(self, presenter):
         try:
             if self.process is not None:
                 self.closer(self.process)
             with self.lock:
                 self.phase = "starting"
-            self.start()
+            self.start(presenter)
         except Exception as error:
             with self.lock:
                 self.phase, self.error = "failed", str(error)

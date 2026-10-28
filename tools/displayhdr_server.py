@@ -11,11 +11,21 @@ import threading
 from displayhdr_api import DisplayHDRClient
 from displayhdr_supervisor import Supervisor
 from displayhdr_ports import COMMANDS as PORT_COMMANDS, DisplayPortService, Renderer
+from displayhdr_window_presentation import WindowPresentation
 
 
 def failure(identifier, code, message, uncertain=False):
     return {"version": 1, "id": identifier, "ok": False,
             "error": {"code": code, "message": message, "requestMayHaveApplied": uncertain}}
+
+
+def present_restarted_renderer(pid):
+    try:
+        window = WindowPresentation().bring_front(pid, keep_on_top=True)
+    except (OSError, RuntimeError) as error:
+        raise RuntimeError("DisplayHDR window check failed after restart: " + str(error)) from error
+    if not window.get("unobstructed"):
+        raise RuntimeError("DisplayHDR window is obscured or window status could not be verified after restart.")
 
 
 class DeadlineReader(io.RawIOBase):
@@ -132,7 +142,7 @@ class Handler(BaseHTTPRequestHandler):
                 if command == "restart_host":
                     if supervisor is None:
                         raise ValueError("Restart requires a managed Host launcher.")
-                    supervisor.restart()
+                    supervisor.restart(presenter=present_restarted_renderer)
                 host = supervisor.status() if supervisor else {"status": "ready", "pid": self.server.pid,
                                                                 "restartSupported": False, "error": ""}
                 host["displayPortControl"] = True
