@@ -10,6 +10,7 @@ import threading
 
 from displayhdr_api import DisplayHDRClient
 from displayhdr_supervisor import Supervisor
+from displayhdr_ports import COMMANDS as PORT_COMMANDS, DisplayPortService, Renderer
 
 
 def failure(identifier, code, message, uncertain=False):
@@ -114,6 +115,16 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(identifier, str):
                 identifier = ""
             command = request.get("command")
+            if isinstance(command, str) and command in PORT_COMMANDS:
+                if self.server.display_ports is None:
+                    self.server.display_ports = DisplayPortService(Renderer(self.server))
+                ports = self.server.display_ports.dispatch(request)
+                self.reply(200, {"version": 1, "id": identifier, "ok": True, "displayPorts": ports})
+                return
+            if (self.server.display_ports is not None and self.server.display_ports.busy()
+                    and command in ("set_state", "key", "restart_host")):
+                self.reply(409, failure(identifier, "display_port_busy", "A display-port operation is running; this command was not sent."))
+                return
             if command in ("get_host_status", "restart_host"):
                 if type(request.get("version")) is not int or request["version"] != 1 or not identifier or set(request) - {"version", "id", "command"}:
                     raise ValueError("Host commands require version 1, an id, and no additional fields.")
@@ -124,6 +135,7 @@ class Handler(BaseHTTPRequestHandler):
                     supervisor.restart()
                 host = supervisor.status() if supervisor else {"status": "ready", "pid": self.server.pid,
                                                                 "restartSupported": False, "error": ""}
+                host["displayPortControl"] = True
                 self.reply(200, {"version": 1, "id": identifier, "ok": True, "host": host})
                 return
             if self.server.supervisor is not None:
@@ -140,6 +152,8 @@ class Handler(BaseHTTPRequestHandler):
         except TimeoutError as error:
             self.reply(504, failure(identifier, "bridge_timeout", str(error),
                                     isinstance(request, dict) and request.get("command") in ("set_state", "key")))
+        except RuntimeError as error:
+            self.reply(409, failure(identifier, "display_port_unavailable", str(error)))
         except (OSError, ConnectionError) as error:
             self.reply(502, failure(identifier, "bridge_unavailable", str(error),
                                     isinstance(request, dict) and request.get("command") in ("set_state", "key")))
@@ -155,6 +169,11 @@ class Server(HTTPServer):
         self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
         super().server_bind()
 
+    def server_close(self):
+        super().server_close()
+        if getattr(self, "display_ports", None) is not None:
+            self.display_ports.close()
+
 
 def create_server(host, port, pid, pipe_timeout=5, body_timeout=5):
     # One HTTP request at a time; no background command queue or automatic replay.
@@ -163,6 +182,7 @@ def create_server(host, port, pid, pipe_timeout=5, body_timeout=5):
     server.supervisor = None
     server.pipe_timeout = pipe_timeout
     server.body_timeout = body_timeout
+    server.display_ports = None
     return server
 
 

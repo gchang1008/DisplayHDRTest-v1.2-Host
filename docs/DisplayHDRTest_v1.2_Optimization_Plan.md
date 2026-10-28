@@ -23,7 +23,7 @@
 
 以下有日期的實作與驗證段落保留當輪狀態、產物路徑與測試結果；現行操作及契約以 [Remote_API.md](Remote_API.md)、[Automation_API.md](Automation_API.md) 與 [Portable_Packages.md](Portable_Packages.md) 為準。
 
-## API 用途與後續量測設備整合
+## API 用途與量測設備整合範圍
 
 導入 DisplayHDR 控制 API 的目的，是讓後續自動化流程串接測試畫面控制與量測設備端 API，實現自動切換測試畫面、核對設定並執行量測。
 
@@ -34,7 +34,7 @@
 3. 透過量測設備端 API 啟動量測並取得結果。
 4. 將量測結果與本次測試識別值、設定快照及狀態版本關聯，再進入下一個測試。
 
-目前優化範圍是提供完整且可核對狀態的 DisplayHDR 控制 API；量測設備端 API 的串接屬於後續整合工作。現階段不將設備廠牌、通訊方式或量測操作寫入 DisplayHDR 測試邏輯。程式回報的 Nits 維持原有計算值，用於核對測試設定；設備量測結果由後續整合流程取得並記錄。
+Host 的範圍是提供完整且可核對狀態的 DisplayHDR 控制 API；量測設備端 API 的串接由 API 使用端負責。設備廠牌、通訊方式或量測操作不加入 DisplayHDR 測試邏輯。程式回報的 Nits 維持原有計算值，用於核對測試設定；設備量測結果由使用端整合流程取得並記錄。
 
 ## 核心功能保護原則
 
@@ -54,7 +54,7 @@
 - 目前沒有直接選擇 Red、Green、Blue、White 的快捷鍵。
 - 目前沒有對外控制 API 或程序間通訊介面；`Main.cpp` 忽略啟動命令列參數。
 
-## 需要修改的項目
+## 原始開發需求（已實作；保留規劃脈絡）
 
 1. **盤點並提供共用的測試控制介面**
    - 盤點程式中所有測試項目，以及每個測試可變更的模式、數值與顯示狀態，作為 API 完整度的依據。
@@ -102,7 +102,7 @@
 
 - 本機 Named Pipe 的 JSON 契約、命令、設定清單、狀態欄位及錯誤格式已實作，見 `Automation_API.md`。
 - 遠端 `POST /api` 路由、單一啟動入口及 Python 客戶端已實作；監聽位址及連接埠透過啟動參數設定，沿用既有命令與快照語意。
-- 正式版本可透過新增 HTTP 服務轉接本機 Named Pipe 控制；操作方式見 `Remote_API.md`。跨電腦連線仍需實際驗收。
+- 正式版本可透過 HTTP 服務轉接本機 Named Pipe 控制；操作方式見 `Remote_API.md`。2026-10-07／08 的設備整合已確認當時區域網路環境的跨電腦連線，完整網路故障及防火牆部署情境仍未驗收。
 
 ## 審查後補充要求與設計建議
 
@@ -140,13 +140,15 @@
    - 驗證 API 設定與查詢涵蓋完整清單，包含無效值、切換中的查詢、鍵盤介入、斷線、倒數、自動換色及裝置重建等情境。
    - 比較 API 未連線與持續查詢時的畫面更新／時序影響，依原版基準訂定可接受範圍；無回歸證據前不得宣稱核心功能未受影響。
 
-## 預計涉及檔案
+## 實作涉及檔案
 
 - `DisplayHDRTest-v1.2-Host/Main.cpp`
 - `DisplayHDRTest-v1.2-Host/Game.h`
 - `DisplayHDRTest-v1.2-Host/Game.cpp`
 - `DisplayHDRTest-v1.2-Host/DisplayHDRComplianceTests.vcxproj`
-- 新增 Named Pipe／API 實作檔（檔名待定）
+- `DisplayHDRTest-v1.2-Host/GameAutomation.cpp`
+- `DisplayHDRTest-v1.2-Host/AutomationPipe.cpp`、`AutomationPipe.h`、`AutomationJson.h`
+- `DisplayHDRTest-v1.2-Host/tools/displayhdr_api.py`、`displayhdr_server.py`、`displayhdr_supervisor.py`、`StartDisplayHDR.cmd`
 
 ## 實作狀態（2026-09-30）
 

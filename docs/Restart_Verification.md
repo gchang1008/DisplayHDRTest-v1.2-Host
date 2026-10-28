@@ -1,5 +1,7 @@
 # Host 程式重啟驗證（2026-10-01）
 
+以下為 2026-10-01 的歷史驗證，不代表現行版本重新驗證；跨電腦連線的後續紀錄及現行操作見 [遠端 API](Remote_API.md)。
+
 ## 成功標準與結果
 
 - HTTP 服務在 Renderer 正常結束或異常終止後保持運行；`get_host_status` 可查詢 `stopped`／`failed`，`restart_host` 可重新啟動服務擁有的程序。
