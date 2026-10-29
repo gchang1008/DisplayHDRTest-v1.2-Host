@@ -133,7 +133,7 @@ class PortTests(unittest.TestCase):
     def switch(self, target=2, identifier="op-1", calibration=False, **fields):
         return self.service.dispatch(self.request("switch_display_port", identifier,
             targetKey=f"00000000:00000063/{target}", monitorDevicePath=f"monitor-{target}",
-            expectedInput=None if calibration else {1: 26, 2: 18, 3: 15}[target], calibration=calibration,
+            expectedInput=None if calibration or fields.get("verificationMode") == "manual" else {1: 26, 2: 18, 3: 15}[target], calibration=calibration,
             allowInterrupt=True, autoSwitchConfirmed=True, **fields))
 
     def test_returns_running_then_cached_ready_without_backup(self):
@@ -142,12 +142,125 @@ class PortTests(unittest.TestCase):
         result = self.service.status()
         self.assertEqual(result["operation"]["phase"], "ready")
         self.assertEqual(result["operation"]["inputValue"], 18)
+        self.assertEqual(result["operation"]["verificationMode"], "ddc")
+        self.assertTrue(result["operation"]["inputVerified"])
         self.assertFalse(result["pendingRestore"])
         self.assertFalse((Path(self.folder.name) / "pending-display-restore.json").exists())
         self.assertFalse(self.service.busy())
         calls = self.input.call_count
         self.service.dispatch(self.request("get_display_port_status"))
         self.assertEqual(self.input.call_count, calls)
+
+    def test_manual_mode_requires_explicit_choice_and_never_verifies_input(self):
+        self.input.side_effect = OSError("DDC unavailable")
+        inventory = self.service.inventory()
+        self.assertFalse(inventory["supported"])
+        self.assertTrue(inventory["manualSupported"])
+        self.switch()
+        self.assertEqual(self.service.status()["operation"]["phase"], "failed")
+        self.assertEqual(self.controller.trials, [])
+        with patch.object(self.service, "wait_input", side_effect=AssertionError("Manual mode must not poll input")):
+            calls = self.input.call_count
+            self.switch(identifier="manual", verificationMode="manual")
+        result = self.service.status()
+        operation = result["operation"]
+        self.assertEqual(operation["phase"], "ready")
+        self.assertTrue(operation["ready"])
+        self.assertEqual(operation["verificationMode"], "manual")
+        self.assertFalse(operation["inputVerified"])
+        self.assertIsNone(operation["inputValue"])
+        self.assertFalse(result["input"]["ok"])
+        self.assertIsNone(result["input"]["currentValue"])
+        self.assertEqual(self.input.call_count, calls + 1)
+        self.assertEqual(self.controller.current, 2)
+        self.assertTrue(operation["hdr"])
+        self.assertTrue(operation["window"]["unobstructed"])
+
+    def test_ddc_timeout_reports_unavailable_only_for_missing_input(self):
+        for reading, unavailable in (({"ok": False, "error": "DDC unavailable"}, True),
+                                     ({"ok": True, "currentValue": 15}, False),
+                                     ({"ok": False, "identityMismatch": True}, False)):
+            error = TimeoutError("Input query timed out")
+            error.input_samples, error.last_input = [reading], reading
+            with patch.object(self.service, "wait_input", side_effect=error):
+                self.switch(identifier=str(reading))
+            self.assertEqual(self.service.status()["operation"]["phase"], "failed")
+            self.assertEqual(self.service.status()["operation"]["inputUnavailable"], unavailable)
+
+    def test_manual_same_active_pairing_does_not_promote_available_ddc_value(self):
+        self.switch(1, calibration=True, verificationMode="manual")
+        result = self.service.status()
+        self.assertEqual(result["operation"]["phase"], "ready")
+        self.assertIsNone(result["operation"]["inputValue"])
+        self.assertFalse(result["operation"]["inputVerified"])
+        self.assertEqual(self.controller.trials, [])
+        refreshed = self.service.inventory()
+        self.assertEqual(refreshed["input"]["currentValue"], 26)
+        self.assertEqual(refreshed["operation"]["verificationMode"], "manual")
+        self.assertFalse(refreshed["operation"]["inputVerified"])
+
+    def test_manual_mode_rejects_wrong_display_identity(self):
+        self.input.side_effect = lambda: {**self.read_input(), "monitorDevicePath": "different-display"}
+        inventory = self.service.inventory()
+        self.assertFalse(inventory["manualSupported"])
+        self.switch(verificationMode="manual")
+        self.assertEqual(self.controller.trials, [])
+        self.assertIn("identity", self.service.status()["operation"]["error"])
+        self.input.side_effect = OSError("DDC unavailable")
+        request = self.request("switch_display_port", "wrong-target", targetKey="00000000:00000063/2",
+            monitorDevicePath="different-display", expectedInput=None, calibration=True,
+            verificationMode="manual", allowInterrupt=True, autoSwitchConfirmed=True)
+        self.service.dispatch(request)
+        self.assertEqual(self.controller.trials, [])
+        self.assertIn("identity", self.service.status()["operation"]["error"])
+
+    def test_native_identity_failure_is_not_treated_as_unavailable_ddc(self):
+        from displayhdr_monitor_input import query_input
+        with self.assertRaises(ports.InputIdentityError):
+            query_input(display=SimpleNamespace(query=lambda flags: SimpleNamespace(paths=[])))
+        self.input.side_effect = ports.InputIdentityError("More than one physical monitor")
+        inventory = self.service.inventory()
+        self.assertTrue(inventory["input"]["identityMismatch"])
+        self.assertFalse(inventory["manualSupported"])
+        self.switch(verificationMode="manual")
+        self.assertEqual(self.controller.trials, [])
+        self.assertEqual(self.service.status()["operation"]["phase"], "failed")
+        self.assertIn("physical monitor", self.service.status()["operation"]["error"])
+
+    def test_manual_mode_retains_database_hdr_and_obstruction_checks(self):
+        self.input.side_effect = OSError("DDC unavailable")
+        with patch.object(self.controller, "inspect", return_value={"active": {"paths": [self.controller.row()]},
+                                                                  "matchesDatabase": False}):
+            self.assertFalse(self.service.inventory()["manualSupported"])
+            self.switch(verificationMode="manual")
+        self.assertEqual(self.controller.trials, [])
+        self.renderer.hdr = False
+        self.switch(identifier="hdr-failure", verificationMode="manual")
+        self.assertIn("HDR", self.service.status()["operation"]["error"])
+        self.renderer.hdr = True
+        self.window.bring_front.return_value = {"unobstructed": False}
+        self.switch(identifier="window-failure", verificationMode="manual")
+        self.assertIn("obscured", self.service.status()["operation"]["error"])
+        self.assertFalse(self.service.status()["operation"]["ready"])
+
+    def test_manual_mode_cannot_bypass_multiple_active_outputs(self):
+        original = self.controller.api.query
+        self.controller.api.query = lambda flags: original(paths.QDC_ALL_PATHS if flags == paths.QDC_ONLY_ACTIVE_PATHS else flags)
+        self.assertFalse(self.service.inventory()["manualSupported"])
+        with patch.object(self.controller, "inspect", return_value={"active": {"paths": [self.controller.row()] * 2},
+                                                                  "matchesDatabase": True}):
+            self.switch(verificationMode="manual")
+        self.assertEqual(self.controller.trials, [])
+
+    def test_verification_mode_fields_are_strict(self):
+        base = self.request("switch_display_port", targetKey="00000000:00000063/2",
+            monitorDevicePath="monitor-2", expectedInput=None, calibration=False,
+            verificationMode="manual", allowInterrupt=True, autoSwitchConfirmed=True)
+        for fields in ({"verificationMode": True}, {"verificationMode": "auto"},
+                       {"verificationMode": None}, {"expectedInput": 18}, {"verificationMode": "ddc"}):
+            with self.subTest(fields=fields), self.assertRaises(ValueError):
+                self.service.dispatch({**base, **fields})
+        self.assertEqual(self.controller.trials, [])
 
     def test_continuous_switch_uses_current_state_without_restoring(self):
         self.switch()

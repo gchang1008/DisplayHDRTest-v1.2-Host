@@ -35,6 +35,10 @@ def decode_input(raw):
     return {'currentValue': None, 'valueFormat': 'unrecognized'}
 
 
+class InputIdentityError(ValueError):
+    pass
+
+
 class WindowsDdc:
     def __init__(self, user=None, dxva=None):
         if os.name != 'nt':
@@ -72,11 +76,11 @@ class WindowsDdc:
             if info.device.casefold() == device.casefold():
                 matches.append(handle)
         if len(matches) != 1:
-            raise ValueError('The active GDI display must identify exactly one logical monitor.')
+            raise InputIdentityError('The active GDI display must identify exactly one logical monitor.')
         count = U32()
         self.check(self.dxva.GetNumberOfPhysicalMonitorsFromHMONITOR(matches[0], C.byref(count)))
         if count.value != 1:
-            raise ValueError('The active GDI display must identify exactly one physical monitor.')
+            raise InputIdentityError('The active GDI display must identify exactly one physical monitor.')
         physical = (PhysicalMonitor * 1)()
         self.check(self.dxva.GetPhysicalMonitorsFromHMONITOR(matches[0], 1, physical))
         result = {}
@@ -97,11 +101,11 @@ def query_input(display=None, ddc=None):
     display = display or WindowsApi()
     paths = display.query(QDC_ONLY_ACTIVE_PATHS).paths
     if len(paths) != 1 or not paths[0].flags & 1 or not paths[0].target.available:
-        raise ValueError('Native input query requires exactly one active available endpoint.')
+        raise InputIdentityError('Native input query requires exactly one active available endpoint.')
     path = paths[0]
     device_path = display.device_path(path)
     if not device_path:
-        raise ValueError('Active monitor identity is unavailable.')
+        raise InputIdentityError('Active monitor identity is unavailable.')
     name = SourceName()
     name.header = Header(1, C.sizeof(name), path.source.adapter, path.source.id)
     WindowsApi.check(display.dll.DisplayConfigGetDeviceInfo(C.byref(name.header)))
@@ -109,7 +113,7 @@ def query_input(display=None, ddc=None):
     after = display.query(QDC_ONLY_ACTIVE_PATHS).paths
     if (len(after) != 1 or not after[0].flags & 1 or key(after[0].target) != key(path.target)
             or display.device_path(after[0]) != device_path):
-        raise ValueError('Active monitor identity changed during the native query.')
+        raise InputIdentityError('Active monitor identity changed during the native query.')
     return {**result, 'targetKey': key(path.target), 'monitorDevicePath': device_path,
             'gdiDevice': name.device, 'durationSeconds': time.monotonic() - started}
 
@@ -136,5 +140,5 @@ if __name__ == '__main__':
         reply = query_input()
     except (OSError, ValueError, RuntimeError) as error:
         reply = {'ok': False, 'errorCode': getattr(error, 'winerror', None) or getattr(error, 'errno', 0),
-                 'error': str(error)}
+                 'error': str(error), 'identityMismatch': isinstance(error, InputIdentityError)}
     print(json.dumps(reply, ensure_ascii=True))

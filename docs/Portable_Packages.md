@@ -51,6 +51,6 @@ Host API 提供 `get_host_status` 查詢程序狀態，以及 `restart_host` 重
 
 使用相容 Client 的 Input Port 配對／切換介面，先確認 DUT 開啟 Auto Switch 與 DDC/CI，並保留單一啟用的 Windows 輸出作為起點。逐一對照 OSD 保存輸入名稱，再使用配對值切換。Port 變更與 HDR 啟用後均重新啟動 DisplayHDR，完成後保留重啟後的畫面，以全螢幕、隱藏說明文字呈現，維持置頂及遮擋檢查，不另切換驗證圖樣；這是手動功能，不會自動啟動跨 Port 量測。
 
-原生 DDC/CI 查詢、畫面遮擋與路徑控制模組已內附，不需安裝 ControlMyMonitor。功能依螢幕、驅動與線材支援程度而定；讀不到、無法區分來源或逾時時停止，不把 Windows 路徑切換成功當作 DUT 已切換成功。完整條件及 API 見 [Remote_API.md](Remote_API.md)。
+原生 DDC/CI 查詢、畫面遮擋與路徑控制模組已內附，不需安裝 ControlMyMonitor。功能依螢幕、驅動與線材支援程度而定；DDC/CI 讀不到時可在使用者明確選擇後改用人工確認，並在每次切換後對照 OSD 與畫面；不把 Windows 路徑切換成功當作來源已自動確認。人工模式仍保留單一路徑、裝置身分、HDR、重啟、置頂及遮擋檢查，無法自動偵測接線交換。此模式需同時更新 Host 與控制端。完整條件及 API 見 [Remote_API.md](Remote_API.md)。
 
 Input 操作狀態、請求 id 與診斷僅保存在記憶體，不建立狀態檔、鎖定檔或資料夾。服務重啟後不保存歷史操作，需重新讀取目前狀態。舊版 display-ports.json 與 display-port-session.lock 不會讀取、覆寫或清除。不建立跨次操作的原始桌面備份，也不提供 Restore；要返回之前來源，直接選擇該 Input。Host 重啟或切換失敗後先 Refresh inputs 重新核對目前路徑與 DDC/CI 來源，通過後即可再切換。舊版 pending-display-restore.json 保留但忽略，不會阻擋操作。移除還原功能需同時更新 Host 與 Client。

@@ -11,7 +11,7 @@ from displayhdr_api import DisplayHDRClient
 from displayhdr_display_paths import (DisplayPaths, Header, TargetName, QDC_ALL_PATHS,
                                       QDC_ONLY_ACTIVE_PATHS, key)
 from displayhdr_hdr_control import HdrControl
-from displayhdr_monitor_input import probe_native
+from displayhdr_monitor_input import InputIdentityError, probe_native
 from displayhdr_window_presentation import WindowPresentation
 
 
@@ -81,20 +81,21 @@ class DisplayPortService:
         self.hdr_factory, self.window_factory = hdr_factory, window_factory
         self.lock = threading.RLock()
         self.closed = False
-        self.data = {"supported": False, "targets": [], "activeTargetKey": "", "input": {},
+        self.data = {"supported": False, "manualSupported": False, "targets": [], "activeTargetKey": "", "input": {},
                      "pendingRestore": False, "operation": self.operation()}
         self.seen = set()
 
     @staticmethod
     def operation():
         return {"operationId": "", "kind": "", "phase": "idle", "error": "", "ready": False,
-                "targetKey": "", "inputValue": None, "hdr": False, "calibration": False}
+                "targetKey": "", "inputValue": None, "hdr": False, "calibration": False,
+                "verificationMode": "ddc", "inputVerified": False, "inputUnavailable": False}
 
     def status(self):
         with self.lock:
             self.data["pendingRestore"] = False
             result = json.loads(json.dumps({name: self.data[name] for name in
-                ("supported", "targets", "activeTargetKey", "input", "pendingRestore")}))
+                ("supported", "manualSupported", "targets", "activeTargetKey", "input", "pendingRestore")}))
             result["operation"] = {name: value for name, value in self.data["operation"].items()
                 if name in {*self.operation(), "state", "window"}}
             if self.data.get("error"):
@@ -112,7 +113,8 @@ class DisplayPortService:
         try:
             return self.input_reader()
         except (OSError, ValueError, RuntimeError, TimeoutError, subprocess.TimeoutExpired) as error:
-            return {"ok": False, "currentValue": None, "error": str(error)}
+            return {"ok": False, "currentValue": None, "error": str(error),
+                    "identityMismatch": isinstance(error, InputIdentityError)}
 
     def inventory(self):
         with self.lock:
@@ -138,18 +140,22 @@ class DisplayPortService:
             error = ""
             if not self.renderer.restart_supported():
                 error = "Port switching requires a managed Host launcher."
-            elif not targets or len(active_keys) != 1:
+            elif not targets or len(active_keys) != 1 or not active_keys.issubset(targets):
                 error = "Enable exactly one connected display before matching or switching."
-            elif not reading.get("ok") or type(reading.get("currentValue")) is not int or not 1 <= reading["currentValue"] <= 255:
-                error = reading.get("error") or "DUT input value could not be confirmed."
-            elif (reading.get("targetKey") not in active_keys or
-                    reading.get("monitorDevicePath") != targets.get(reading.get("targetKey"), {}).get("monitorDevicePath")):
+            elif reading.get("identityMismatch") is True:
+                error = reading.get("error") or "Native display identity could not be verified."
+            elif (reading.get("ok") is True and (reading.get("targetKey") not in active_keys or
+                    reading.get("monitorDevicePath") != targets.get(reading.get("targetKey"), {}).get("monitorDevicePath"))):
                 error = "DDC/CI display identity does not match the active output."
             elif not controller.inspect().get("matchesDatabase"):
                 error = "Active and saved display configurations differ; verify Windows display settings."
+            manual_supported = not error
+            if not error and (not reading.get("ok") or type(reading.get("currentValue")) is not int
+                              or not 1 <= reading["currentValue"] <= 255):
+                error = reading.get("error") or "DUT input value could not be confirmed."
             self.data.update(targets=list(targets.values()), input=reading,
                              activeTargetKey=next(iter(active_keys)) if len(active_keys) == 1 else "",
-                             supported=not error, error=error)
+                             supported=not error, manualSupported=manual_supported, error=error)
             if self.data["supported"] and self.data["operation"]["phase"] == "failed":
                 self.data["operation"] = self.operation()
             return self.status()
@@ -163,6 +169,8 @@ class DisplayPortService:
         common = {"version", "id", "command"}
         fields = (common | {"targetKey", "monitorDevicePath", "expectedInput", "calibration", "allowInterrupt", "autoSwitchConfirmed"}
                   if command == "switch_display_port" else common)
+        if command == "switch_display_port" and "verificationMode" in request:
+            fields.add("verificationMode")
         if set(request) != fields or type(request.get("version")) is not int or request["version"] != 1 or not isinstance(request.get("id"), str) or not request["id"]:
             raise ValueError("Unexpected or missing display-port command fields.")
         if command == "get_display_ports":
@@ -173,11 +181,12 @@ class DisplayPortService:
             raise ValueError("Explicit allowInterrupt=true is required.")
         if command == "switch_display_port":
             calibration, expected = request["calibration"], request["expectedInput"]
-            if (type(calibration) is not bool or request["autoSwitchConfirmed"] is not True
+            verification = request.get("verificationMode", "ddc")
+            if (verification not in ("ddc", "manual") or type(calibration) is not bool or request["autoSwitchConfirmed"] is not True
                     or not isinstance(request["targetKey"], str) or not request["targetKey"]
                     or not isinstance(request["monitorDevicePath"], str) or not request["monitorDevicePath"]
-                    or (calibration and expected is not None)
-                    or (not calibration and (type(expected) is not int or not 1 <= expected <= 255))):
+                    or ((calibration or verification == "manual") and expected is not None)
+                    or (not calibration and verification == "ddc" and (type(expected) is not int or not 1 <= expected <= 255))):
                 raise ValueError("Confirm Auto Switch and provide a valid target and calibration/input value.")
         with self.lock:
             if request["id"] == self.data["operation"]["operationId"]:
@@ -196,7 +205,8 @@ class DisplayPortService:
             self.seen.add(request["id"])
             self.data["operation"] = {**self.operation(), "operationId": request["id"], "kind": command,
                                       "phase": "running", "targetKey": request.get("targetKey", ""),
-                                      "calibration": request.get("calibration", False), "request": request}
+                                      "calibration": request.get("calibration", False), "request": request,
+                                      "verificationMode": request.get("verificationMode", "ddc")}
             try:
                 response = self.status()
                 threading.Thread(target=self.work, args=(request,), daemon=True).start()
@@ -228,6 +238,7 @@ class DisplayPortService:
 
     def work(self, request):
         operation = dict(self.data["operation"])
+        manual = request.get("verificationMode", "ddc") == "manual"
         try:
             controller = self.controller_factory()
             target, identity = request["targetKey"], request["monitorDevicePath"]
@@ -236,12 +247,22 @@ class DisplayPortService:
                 raise ValueError("Verify exactly one active display and its saved configuration before switching.")
             original_input = self.read_input()
             active = current["active"]["paths"][0]
-            if (not original_input.get("ok") or type(original_input.get("currentValue")) is not int
+            if original_input.get("identityMismatch") is True:
+                raise ValueError(original_input.get("error") or "Native display identity could not be verified.")
+            if (original_input.get("ok") is True and
+                    (original_input.get("targetKey") != active["targetKey"]
+                     or original_input.get("monitorDevicePath") != active.get("monitorDevicePath"))):
+                raise ValueError("DDC/CI display identity does not match the active output.")
+            if not manual and (not original_input.get("ok") or type(original_input.get("currentValue")) is not int
                     or not 1 <= original_input["currentValue"] <= 255
                     or original_input.get("targetKey") != active["targetKey"]
                     or original_input.get("monitorDevicePath") != active.get("monitorDevicePath")):
                 raise ValueError("DUT DDC/CI input is unavailable; no port switch was applied.")
 
+            selected = next((path for path in controller.api.query(QDC_ALL_PATHS).paths
+                             if path.target.available and key(path.target) == target), None)
+            if selected is None or controller.api.device_path(selected) != identity:
+                raise ValueError("Requested display identity does not match the connected output.")
             if active["targetKey"] == target and active.get("monitorDevicePath") != identity:
                 raise ValueError("Active target identity does not match the requested path.")
             self.renderer.request("set_state", test="StartOfTest", settings={"fullscreen": True})
@@ -253,9 +274,13 @@ class DisplayPortService:
                 operation["hdrRestart"] = self.renderer.restart()
             elif active["targetKey"] == target:
                 operation["freshRestart"] = self.renderer.restart()
-            excluded = original_input["currentValue"] if request["calibration"] and active["targetKey"] != target else None
-            reading, samples = self.wait_input(target, identity, request["expectedInput"], excluded=excluded)
-            operation["inputSamples"] = samples
+            if manual:
+                reading = {"ok": False, "currentValue": None,
+                           "error": "Input source requires manual confirmation."}
+            else:
+                excluded = original_input["currentValue"] if request["calibration"] and active["targetKey"] != target else None
+                reading, samples = self.wait_input(target, identity, request["expectedInput"], excluded=excluded)
+                operation["inputSamples"] = samples
             current = controller.inspect()
             if (len(current["active"]["paths"]) != 1 or current["active"]["paths"][0]["targetKey"] != target
                     or current["active"]["paths"][0].get("monitorDevicePath") != identity or not current.get("matchesDatabase")):
@@ -270,9 +295,10 @@ class DisplayPortService:
             if not window.get("unobstructed"):
                 raise RuntimeError("Host window is obscured or window status could not be verified.")
             with self.lock:
-                self.data.update(input=reading, activeTargetKey=active_target, operation=operation, supported=True, error="")
+                self.data.update(input=reading, activeTargetKey=active_target, operation=operation,
+                                 supported=not manual, manualSupported=True, error="")
                 operation.update(phase="ready", ready=True, error="", inputValue=reading.get("currentValue"),
-                                 hdr=bool(state["display"]["hdr"]), state=state, window=window)
+                                 hdr=bool(state["display"]["hdr"]), state=state, window=window, inputVerified=not manual)
                 for item in self.data["targets"]:
                     item["active"] = item["targetKey"] == self.data["activeTargetKey"]
         except Exception as error:
@@ -282,5 +308,9 @@ class DisplayPortService:
                 if getattr(error, "input_samples", None):
                     operation["inputSamples"] = error.input_samples
                     self.data["input"] = error.last_input
+                    reading = error.last_input
+                    value = reading.get("currentValue")
+                    operation["inputUnavailable"] = (reading.get("identityMismatch") is not True and
+                        (reading.get("ok") is not True or type(value) is not int or not 1 <= value <= 255))
                 self.data["operation"] = operation
                 self.data["operation"].update(phase="failed", ready=False, error=str(error))
