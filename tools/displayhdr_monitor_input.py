@@ -1,4 +1,4 @@
-"""Read VCP 0x60 through Windows DXVA2; never writes monitor settings."""
+"""Bounded native VCP 0x60 reads and explicitly requested input writes."""
 import ctypes as C
 import json
 import os
@@ -54,6 +54,7 @@ class WindowsDdc:
             (self.dxva.GetNumberOfPhysicalMonitorsFromHMONITOR, [C.c_void_p, C.POINTER(U32)]),
             (self.dxva.GetPhysicalMonitorsFromHMONITOR, [C.c_void_p, U32, C.POINTER(PhysicalMonitor)]),
             (self.dxva.DestroyPhysicalMonitors, [U32, C.POINTER(PhysicalMonitor)]),
+            (self.dxva.SetVCPFeature, [C.c_void_p, C.c_ubyte, U32]),
             (self.dxva.GetVCPFeatureAndVCPFeatureReply,
              [C.c_void_p, C.c_ubyte, C.POINTER(I32), C.POINTER(U32), C.POINTER(U32)]))
         for function, arguments in functions:
@@ -65,6 +66,12 @@ class WindowsDdc:
             raise C.WinError(C.get_last_error())
 
     def read(self, device):
+        return self.transfer(device)
+
+    def write(self, device, value):
+        return self.transfer(device, value)
+
+    def transfer(self, device, value=None):
         monitors = []
         callback = self.callback(lambda handle, dc, rect, data: monitors.append(handle) or 1)
         self.check(self.user.EnumDisplayMonitors(None, None, callback, 0))
@@ -85,6 +92,9 @@ class WindowsDdc:
         self.check(self.dxva.GetPhysicalMonitorsFromHMONITOR(matches[0], 1, physical))
         result = {}
         try:
+            if value is not None:
+                self.check(self.dxva.SetVCPFeature(physical[0].handle, 0x60, value))
+                return {"accepted": True, "vcpCode": "60", "value": value}
             kind, current, maximum = I32(), U32(), U32()
             self.check(self.dxva.GetVCPFeatureAndVCPFeatureReply(
                 physical[0].handle, 0x60, C.byref(kind), C.byref(current), C.byref(maximum)))
@@ -96,7 +106,7 @@ class WindowsDdc:
         return result
 
 
-def query_input(display=None, ddc=None):
+def query_input(display=None, ddc=None, write=None):
     started = time.monotonic()
     display = display or WindowsApi()
     paths = display.query(QDC_ONLY_ACTIVE_PATHS).paths
@@ -109,7 +119,15 @@ def query_input(display=None, ddc=None):
     name = SourceName()
     name.header = Header(1, C.sizeof(name), path.source.adapter, path.source.id)
     WindowsApi.check(display.dll.DisplayConfigGetDeviceInfo(C.byref(name.header)))
-    result = (ddc or WindowsDdc()).read(name.device)
+    if write is not None:
+        target, identity, value = write
+        if key(path.target) != target or device_path != identity:
+            raise InputIdentityError("Active display identity changed before DDC write.")
+        if type(value) is not int or not 1 <= value <= 255:
+            raise ValueError("Invalid DDC input value.")
+        result = (ddc or WindowsDdc()).write(name.device, value)
+    else:
+        result = (ddc or WindowsDdc()).read(name.device)
     after = display.query(QDC_ONLY_ACTIVE_PATHS).paths
     if (len(after) != 1 or not after[0].flags & 1 or key(after[0].target) != key(path.target)
             or display.device_path(after[0]) != device_path):
@@ -133,11 +151,24 @@ def native_value():
     return result['currentRaw']
 
 
+def write_native(target, identity, value):
+    result = subprocess.run([sys.executable, '-B', str(Path(__file__).resolve()),
+        '--write', target, identity, str(value)], capture_output=True, timeout=3,
+        creationflags=subprocess.CREATE_NO_WINDOW)
+    if result.returncode or len(result.stdout) > 65536:
+        raise RuntimeError('DDC writer failed; outcome may be unknown. No retry was sent.')
+    report = json.loads(result.stdout.decode('utf-8'))
+    if report.get('accepted') is not True:
+        raise RuntimeError(report.get('error', 'DDC input write failed.'))
+    return report
+
+
 if __name__ == '__main__':
-    if sys.argv[1:] != ['--worker']:
-        raise SystemExit('Only the fixed read-only worker entry point is supported.')
+    writing = len(sys.argv) == 5 and sys.argv[1] == '--write'
+    if sys.argv[1:] != ['--worker'] and not writing:
+        raise SystemExit('Only fixed native worker entry points are supported.')
     try:
-        reply = query_input()
+        reply = query_input(write=(sys.argv[2], sys.argv[3], int(sys.argv[4])) if writing else None)
     except (OSError, ValueError, RuntimeError) as error:
         reply = {'ok': False, 'errorCode': getattr(error, 'winerror', None) or getattr(error, 'errno', 0),
                  'error': str(error), 'identityMismatch': isinstance(error, InputIdentityError)}

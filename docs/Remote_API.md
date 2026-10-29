@@ -162,8 +162,24 @@ DDC 模式的配對要求 `calibration: true`、`expectedInput: null`；等待�
 
 `switch_display_port` 的 `verificationMode` 可省略，預設 `ddc`，保留既有呼叫相容；只有明確指定 `manual` 才略過 DDC/CI 來源讀值要求。`manual` 的 `expectedInput` 必須為 null，不論 `calibration` 為 true 或 false。Host 仍核對唯一啟用輸出、實際連接裝置路徑與 Windows 已儲存組態，並完成 HDR、必要重啟、全螢幕、置頂及遮擋檢查，不得略過這些條件。
 
+### Input switching modes
+
+`get_display_ports` 與 `get_display_port_status` 可帶 `switchMode`（`pair`、`active`、`passive`），回覆包含 `switchModes: ["active", "passive"]`。`passive` inventory 不存取 DDC/CI；status 僅讀快取。
+
+`switch_display_port` 新增可選 `switchMode`，省略時為既有的 `pair`；`passiveWaitSeconds` 為 1–600 秒的有限數值，預設 15 秒。既有必填欄位保持不變。
+
+- `pair`：透過 Auto Switch 配對，要求 `autoSwitchConfirmed: true`。`calibration: true` 搭配 `verificationMode: ddc` 讀取切換後來源；明確指定 `switchMode: pair` 與 `verificationMode: manual` 時完全不讀寫 DDC/CI，由呼叫端確認來源。
+- `active`：要求 `calibration: false`、`verificationMode: ddc` 及已配對的數值 `expectedInput`。經目前啟用輸出確認身分後，只送一次 VCP 0x60 寫入，再套用 Windows 單一輸出。無自動重送或 Passive fallback。HDR、必要重啟、全螢幕、置頂與遮擋確認後，來源與顯示就緒須連續穩定至少 10 秒，失敗樣本會重置計時。成功時 `stableSeconds >= 10`、`inputVerified: true`。建議關閉 Auto Switch；布林 `autoSwitchConfirmed` 僅代表使用者確認設定，不是硬體查詢結果。
+- `passive`：要求 `verificationMode: manual`、`expectedInput: null`、`autoSwitchConfirmed: true`，完全不讀寫 DDC/CI。Windows、HDR、重啟與視窗就緒後才開始指定等待時間；成功回報 `timedReady: true`、`waitSeconds`、`inputVerified: false`、null 輸入值。等待完成不代表已自動驗證 DUT 實際來源。
+
+計時期間 `waitRemainingSeconds` 回報剩餘時間。來源或顯示就緒不穩定會重置間隔，總等待上限為指定間隔加 45 秒。失敗時保持目前輸出，不自動還原；執行期間的 inventory 不會變更正在使用的模式。Passive 工作階段包含背景刷新均應使用 Passive inventory。
+
+Active 必須選擇不同於目前啟用的輸出，不能在同一來源寫回相同值作為切換驗證。明確指定 Active／Passive 且 `allowInterrupt: true` 的一般切換可從目前人工操作畫面執行，保留切換前的測試及其設定，必要重啟後重新套用，僅強制全螢幕與隱藏說明；不指定藍色圖樣。呼叫端仍須阻擋量測及自動化執行期間的切換。配對及省略 `switchMode` 的既有呼叫維持原畫面限制與起始畫面行為。
+
+設定恢復前依來源 `catalog.settingSchema` 篩除超出可寫數值範圍的初始化值，切換及重啟後再依目標 catalog 篩選，避免將校正哨兵值或超出目標 profile 上限的索引回寫。合法設定保持原值；不裁切或換算。來源 catalog 讀取失敗時，在 DDC 寫入或 Windows 輸出變更前停止。
+
 `manualSupported` 只代表目前硬體路徑與受管理 Host 可進行人工確認操作，不代表 DDC/CI 可讀或來源已確認。一般 DDC/CI 無回覆／未知讀值時可為 true；已知多重螢幕、裝置身分不符、Windows 組態不一致或未受管理啟動時為 false。原生讀取用 `identityMismatch: true` 區分已知身分／多重螢幕錯誤與一般通訊失敗，這種錯誤不能改用人工模式略過。
 
-人工模式只做一次有界原生讀取以拒絕明確身分不符，不等待來源值穩定。Host 完成時 `phase=ready`、`ready=true` 只表示路徑、HDR 及視窗已就緒，另回 `verificationMode=manual`、`inputVerified=false`、`inputValue=null`；即使原生查詢偶然讀到數值也不自動升級為 DDC 驗證。控制端必須等使用者確認實際畫面與 OSD 後才視為完成。DDC 模式成功才回 `inputVerified=true`。
+省略 `switchMode` 的既有人工模式只做一次有界原生讀取以拒絕明確身分不符，不等待來源值穩定。Host 完成時 `phase=ready`、`ready=true` 只表示路徑、HDR 及視窗已就緒，另回 `verificationMode=manual`、`inputVerified=false`、`inputValue=null`；即使原生查詢偶然讀到數值也不自動升級為 DDC 驗證。這類既有呼叫仍須等使用者確認實際畫面與 OSD 後才視為完成；明確指定 Passive 的新呼叫則依上述計時完成判斷。DDC 模式成功才回 `inputVerified=true`。
 
 DDC 模式切換後等待來源逾時，若最後仍無有效讀值且沒有明確身分錯誤，`operation.inputUnavailable` 為 true；有效但不符的來源值不會設為 true。控制端可重新盤點，確認 `manualSupported` 後詢問使用者是否改用人工方式，不可自動重送。失敗時輸出可能已改變，取消人工方式不會還原。

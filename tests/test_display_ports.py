@@ -84,6 +84,9 @@ class Renderer:
         self.test = fields.get("test", self.test)
         return self.state()
 
+    def catalog(self):
+        return {"settingSchema": {}}
+
     def restart(self):
         self.restart_count += 1
         if self.restart_error:
@@ -135,6 +138,163 @@ class PortTests(unittest.TestCase):
             targetKey=f"00000000:00000063/{target}", monitorDevicePath=f"monitor-{target}",
             expectedInput=None if calibration or fields.get("verificationMode") == "manual" else {1: 26, 2: 18, 3: 15}[target], calibration=calibration,
             allowInterrupt=True, autoSwitchConfirmed=True, **fields))
+
+    def timed_switch(self, **fields):
+        clock = [0.0]
+        def sleep(seconds):
+            clock[0] += seconds
+        with patch.object(ports.time, "monotonic", side_effect=lambda: clock[0]), patch.object(ports.time, "sleep", side_effect=sleep):
+            self.switch(**fields)
+        return clock[0], self.service.status()["operation"]
+
+    def test_active_writes_once_before_windows_and_waits_ten_seconds(self):
+        order = []
+        self.service.input_writer = Mock(side_effect=lambda *args: order.append(("write", self.controller.current)) or {"accepted": True})
+        trial = self.controller.trial
+        self.controller.trial = lambda *args, **kwargs: order.append(("windows", self.controller.current)) or trial(*args, **kwargs)
+        elapsed, result = self.timed_switch(switchMode="active")
+        self.assertEqual(order, [("write", 1), ("windows", 1)])
+        self.service.input_writer.assert_called_once_with("00000000:00000063/1", "monitor-1", 18)
+        self.assertGreaterEqual(elapsed, 10)
+        self.assertTrue(result["inputVerified"])
+        self.assertGreaterEqual(result["stableSeconds"], 10)
+        self.assertFalse(result["timedReady"])
+        self.assertEqual(result["phase"], "ready")
+        self.assertEqual(self.service.status()["switchModes"], ["active", "passive"])
+
+    def test_active_transient_read_failure_resets_stability_window(self):
+        self.service.input_writer = Mock(return_value={"accepted": True})
+        reads = [0]
+        def read():
+            reads[0] += 1
+            return {"ok": False} if reads[0] == 8 else self.read_input()
+        self.input.side_effect = read
+        elapsed, result = self.timed_switch(switchMode="active")
+        self.assertGreater(elapsed, 12)
+        self.assertEqual(result["phase"], "ready")
+
+    def test_active_write_failure_never_falls_back_or_applies_windows(self):
+        self.service.input_writer = Mock(side_effect=TimeoutError("write unknown"))
+        self.switch(switchMode="active")
+        self.assertEqual(self.controller.trials, [])
+        self.service.input_writer.assert_called_once()
+        self.assertEqual(self.service.status()["operation"]["phase"], "failed")
+
+    def test_active_same_target_is_rejected_without_writing(self):
+        self.service.input_writer = Mock(side_effect=AssertionError("Same input must not be written"))
+        self.switch(target=1, switchMode="active")
+        self.service.input_writer.assert_not_called()
+        self.assertEqual(self.controller.trials, [])
+        self.assertEqual(self.renderer.restart_count, 0)
+        result = self.service.status()["operation"]
+        self.assertFalse(result["ready"])
+        self.assertIn("different input", result["error"])
+
+    def test_modes_preserve_fullscreen_color_and_settings_after_restart(self):
+        for mode in ("active", "passive"):
+            with self.subTest(mode=mode):
+                self.controller.current = 1
+                self.renderer.test = "ColorPatchesFull"
+                settings = {"color": "Green", "whiteLevel": 600, "testingTier": 1000,
+                            "fullscreen": True, "textVisible": True}
+                original = self.renderer.state
+                self.service.input_writer = Mock(return_value={"accepted": True})
+                snapshot = {**original(), "settings": settings}
+                with patch.object(self.renderer, "state", return_value=snapshot), patch.object(
+                        self.renderer, "request", wraps=self.renderer.request) as request:
+                    self.timed_switch(identifier=mode, switchMode=mode,
+                        **({"verificationMode": "manual", "passiveWaitSeconds": 1} if mode == "passive" else {}))
+                request.assert_called_once_with("set_state", test="ColorPatchesFull",
+                    settings={**settings, "fullscreen": True, "textVisible": False})
+                self.assertEqual(self.service.status()["operation"]["phase"], "ready")
+
+    def test_modes_preserve_manual_test_without_requiring_start_screen(self):
+        for mode in ("active", "passive"):
+            with self.subTest(mode=mode):
+                self.controller.current = 1
+                self.renderer.test = "PanelCharacteristics"
+                self.service.input_writer = Mock(return_value={"accepted": True})
+                with patch.object(self.renderer, "request", wraps=self.renderer.request) as request:
+                    self.timed_switch(identifier=mode, switchMode=mode,
+                        **({"verificationMode": "manual", "passiveWaitSeconds": 1} if mode == "passive" else {}))
+                self.assertEqual(self.service.status()["operation"]["phase"], "ready")
+                self.assertEqual(self.renderer.test, "PanelCharacteristics")
+                self.assertEqual(request.call_args.kwargs["test"], "PanelCharacteristics")
+
+    def test_preserve_skips_startup_sentinels_and_rechecks_target_ranges(self):
+        self.renderer.test = "ColorPatchesFull"
+        self.service.input_writer = Mock(return_value={"accepted": True})
+        settings = {"color": "Green", "testingTier": 1000, "fullscreen": True, "textVisible": True,
+                    "staticContrastPq": 0, "activeDimmingPq": 0, "activeDimmingDarkPq": 0,
+                    "calibrationMaxPq": -1, "calibrationFullFramePq": -1, "calibrationMinPq": -1,
+                    "calibrationMaxSrgb": -1, "calibrationFullFrameSrgb": -1, "calibrationMinSrgb": -1,
+                    "staticContrastSrgb": 128, "profileIndex": 40}
+        ranges = {"staticContrastPq": (100, 750), "activeDimmingPq": (420, 488),
+                  "activeDimmingDarkPq": (208, 292), "profileIndex": (0, 51)}
+        ranges.update({name: (0, 1023 if name.endswith("Pq") else 255)
+                       for name in settings if name.startswith("calibration")})
+        source_schema = {name: {"minimum": low, "maximum": high} for name, (low, high) in ranges.items()}
+        target_schema = {**source_schema, "profileIndex": {"minimum": 0, "maximum": 32}}
+        snapshot = {**self.renderer.state(), "settings": settings}
+        with patch.object(self.renderer, "state", return_value=snapshot), patch.object(
+                self.renderer, "catalog", side_effect=[{"settingSchema": source_schema}, {"settingSchema": target_schema}]) as catalog, patch.object(
+                self.renderer, "request", wraps=self.renderer.request) as request:
+            self.timed_switch(switchMode="active")
+        self.assertEqual(catalog.call_count, 2)
+        restored = request.call_args.kwargs["settings"]
+        self.assertEqual(restored, {"color": "Green", "testingTier": 1000, "fullscreen": True,
+                                    "textVisible": False, "staticContrastSrgb": 128})
+        self.assertEqual(self.service.status()["operation"]["phase"], "ready")
+
+    def test_source_catalog_failure_stops_before_any_switch_or_write(self):
+        self.service.input_writer = Mock(side_effect=AssertionError("DDC write forbidden"))
+        with patch.object(self.renderer, "catalog", side_effect=RuntimeError("catalog unavailable")):
+            self.switch(switchMode="active")
+        self.service.input_writer.assert_not_called()
+        self.assertEqual(self.controller.trials, [])
+        self.assertEqual(self.renderer.restart_count, 0)
+        self.assertIn("catalog unavailable", self.service.status()["operation"]["error"])
+
+    def test_passive_inventory_pair_and_switch_never_access_ddc(self):
+        self.input.side_effect = AssertionError("DDC read forbidden")
+        self.service.input_writer = Mock(side_effect=AssertionError("DDC write forbidden"))
+        self.service.dispatch(self.request("get_display_ports", switchMode="passive"))
+        self.assertTrue(self.service.status()["manualSupported"])
+        self.switch(calibration=True, verificationMode="manual", switchMode="pair")
+        self.assertEqual(self.service.status()["operation"]["phase"], "ready")
+        elapsed, result = self.timed_switch(target=3, identifier="passive", verificationMode="manual", switchMode="passive", passiveWaitSeconds=7)
+        self.assertGreaterEqual(elapsed, 7)
+        self.assertTrue(result["timedReady"])
+        self.assertFalse(result["inputVerified"])
+        self.assertIsNone(result["inputValue"])
+        self.input.assert_not_called()
+        self.service.input_writer.assert_not_called()
+
+    def test_switch_modes_validate_wait_and_cannot_use_manual_active(self):
+        for fields in ({"switchMode": "other"}, {"switchMode": "active", "calibration": True},
+                       {"switchMode": "active", "verificationMode": "manual"},
+                       {"switchMode": "passive", "passiveWaitSeconds": 0},
+                       {"switchMode": "passive", "passiveWaitSeconds": 601},
+                       {"switchMode": "passive", "passiveWaitSeconds": float("nan")}):
+            with self.subTest(fields=fields), self.assertRaises(ValueError):
+                self.switch(**fields)
+        self.assertEqual(self.controller.trials, [])
+
+    def test_stability_failure_is_bounded_and_does_not_claim_ready(self):
+        self.service.input_writer = Mock(return_value={"accepted": True})
+        original = self.renderer.state
+        reads = [0]
+        def state():
+            reads[0] += 1
+            result = original()
+            if reads[0] > 4:
+                result["display"]["hdr"] = False
+            return result
+        self.renderer.state = state
+        elapsed, result = self.timed_switch(switchMode="active")
+        self.assertLessEqual(elapsed, 56)
+        self.assertFalse(result["ready"])
+        self.assertEqual(result["phase"], "failed")
 
     def test_returns_running_then_cached_ready_without_backup(self):
         initial = self.switch()
@@ -479,6 +639,35 @@ class PortTests(unittest.TestCase):
         request["extra"] = True
         with self.assertRaises(ValueError):
             self.service.dispatch(request)
+
+
+class NativeWriteTests(unittest.TestCase):
+    def test_write_validates_identity_and_sends_only_source_value(self):
+        import displayhdr_monitor_input as native
+        controller = Controller()
+        display = SimpleNamespace(query=controller.query, device_path=controller.api.device_path,
+            dll=SimpleNamespace(DisplayConfigGetDeviceInfo=lambda packet: 0))
+        ddc = Mock()
+        ddc.write.return_value = {"accepted": True, "value": 18}
+        with self.assertRaises(native.InputIdentityError):
+            native.query_input(display=display, ddc=ddc, write=("wrong", "monitor-1", 18))
+        ddc.write.assert_not_called()
+        result = native.query_input(display=display, ddc=ddc, write=("00000000:00000063/1", "monitor-1", 18))
+        self.assertTrue(result["accepted"])
+        ddc.write.assert_called_once_with("", 18)
+        ddc.read.assert_not_called()
+
+    def test_write_worker_has_bound_and_never_retries_unknown_result(self):
+        import displayhdr_monitor_input as native
+        with patch.object(native.subprocess, "run", side_effect=subprocess.TimeoutExpired("native", 3)) as run:
+            with self.assertRaises(subprocess.TimeoutExpired):
+                native.write_native("target", "identity", 18)
+        run.assert_called_once()
+        self.assertEqual(run.call_args.kwargs["timeout"], 3)
+        self.assertEqual(run.call_args.args[0][-4:], ["--write", "target", "identity", "18"])
+        with patch.object(native.subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout=b'{"accepted":false,"error":"unsupported"}')):
+            with self.assertRaisesRegex(RuntimeError, "unsupported"):
+                native.write_native("target", "identity", 18)
 
 
 class PathSelectionTests(unittest.TestCase):
