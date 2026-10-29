@@ -371,11 +371,7 @@ class DisplayPortService:
             if mode == "active" and active["targetKey"] == target:
                 raise ValueError("Active switching requires a different input for write verification.")
             pure = "switchMode" in request
-            preserve = pure and not request["calibration"]
-            original_state = self.renderer.state() if preserve else None
-            if original_state is not None:
-                original_state["settings"] = self.writable_settings(original_state["settings"])
-            if not preserve:
+            if not pure or request["calibration"]:
                 self.renderer.request("set_state", test="StartOfTest", settings={} if pure else {"fullscreen": True})
             if mode == "active":
                 operation["write"] = self.input_writer(active["targetKey"], active["monitorDevicePath"], request["expectedInput"])
@@ -401,10 +397,8 @@ class DisplayPortService:
                     or current["active"]["paths"][0].get("monitorDevicePath") != identity or not current.get("matchesDatabase")):
                 raise RuntimeError("The selected display configuration changed.")
             active_target = target
-            fields = {"settings": {} if pure else {"fullscreen": True, "textVisible": False}}
-            if original_state is not None:
-                fields.update(test=original_state["test"]["id"], settings=self.writable_settings(original_state["settings"]))
-            state = self.renderer.request("set_state", **fields)
+            state = (self.renderer.state() if pure else
+                     self.renderer.request("set_state", settings={"fullscreen": True, "textVisible": False}))
             if not pure and not state.get("display", {}).get("hdr"):
                 raise RuntimeError("HDR mode was not confirmed after the port switch.")
             if not all(state.get("presentation", {}).get(k) is True for k in ("presented", "resourcesValid")):

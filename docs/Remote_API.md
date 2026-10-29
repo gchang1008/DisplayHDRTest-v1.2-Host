@@ -174,9 +174,9 @@ DDC 模式的配對要求 `calibration: true`、`expectedInput: null`；等待�
 
 計時期間 `waitRemainingSeconds` 回報剩餘時間。來源或顯示就緒不穩定會重置間隔，總等待上限為指定間隔加 45 秒。失敗時保持目前輸出，不自動還原；執行期間的 inventory 不會變更正在使用的模式。Passive 工作階段包含背景刷新均應使用 Passive inventory。
 
-Active 必須選擇不同於目前啟用的輸出，不能在同一來源寫回相同值作為切換驗證。明確指定 Active／Passive 且 `allowInterrupt: true` 的一般切換可從目前人工操作畫面執行，保留切換前的測試及其設定，必要重啟後重新套用，不啟用或檢查 HDR，也不置頂、檢查遮擋或強制全螢幕／隱藏說明；不指定藍色圖樣。呼叫端仍須阻擋量測及自動化執行期間的切換。配對維持起始畫面與既有畫面限制，但明確指定 `switchMode: pair` 時同樣不進行 HDR／置頂遮擋檢查。省略 `switchMode` 的舊呼叫保持相容行為。
+Active 必須選擇不同於目前啟用的輸出，不能在同一來源寫回相同值作為切換驗證。明確指定 Active／Passive 且 `allowInterrupt: true` 的一般切換可從目前人工操作畫面執行，不保存切換前的畫面或設定；Port 變更後必要重啟，停留在程式預設啟動畫面，不再額外送出測試畫面或設定指令，不啟用或檢查 HDR，也不置頂、檢查遮擋或強制全螢幕／隱藏說明；不指定藍色圖樣。呼叫端仍須阻擋量測及自動化執行期間的切換。配對維持起始畫面與既有畫面限制，但明確指定 `switchMode: pair` 時同樣不進行 HDR／置頂遮擋檢查。省略 `switchMode` 的舊呼叫保持相容行為。
 
-設定恢復前依來源 `catalog.settingSchema` 篩除超出可寫數值範圍的初始化值，切換及重啟後再依目標 catalog 篩選，避免將校正哨兵值或超出目標 profile 上限的索引回寫。合法設定保持原值；不裁切或換算。來源 catalog 讀取失敗時，在 DDC 寫入或 Windows 輸出變更前停止。
+一般 Input 切換不再讀取設定 catalog 以保存或恢復原畫面；測試前 `prepare_display_test` 的設定處理仍維持既有行為。
 
 `manualSupported` 只代表目前硬體路徑與受管理 Host 可進行人工確認操作，不代表 DDC/CI 可讀或來源已確認。一般 DDC/CI 無回覆／未知讀值時可為 true；已知多重螢幕、裝置身分不符、Windows 組態不一致或未受管理啟動時為 false。原生讀取用 `identityMismatch: true` 區分已知身分／多重螢幕錯誤與一般通訊失敗，這種錯誤不能改用人工模式略過。
 

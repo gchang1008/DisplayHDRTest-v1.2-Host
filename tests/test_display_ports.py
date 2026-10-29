@@ -190,70 +190,33 @@ class PortTests(unittest.TestCase):
         self.assertFalse(result["ready"])
         self.assertIn("different input", result["error"])
 
-    def test_modes_preserve_fullscreen_color_and_settings_after_restart(self):
+    def test_modes_restart_without_saving_or_restoring_screen_settings(self):
         for mode in ("active", "passive"):
             with self.subTest(mode=mode):
                 self.controller.current = 1
                 self.renderer.test = "ColorPatchesFull"
-                settings = {"color": "Green", "whiteLevel": 600, "testingTier": 1000,
-                            "fullscreen": True, "textVisible": True}
-                original = self.renderer.state
                 self.service.input_writer = Mock(return_value={"accepted": True})
-                snapshot = {**original(), "settings": settings}
-                with patch.object(self.renderer, "state", return_value=snapshot), patch.object(
-                        self.renderer, "request", wraps=self.renderer.request) as request:
+                restart = self.renderer.restart
+                def boot():
+                    self.renderer.test = "StartOfTest"
+                    return restart()
+                with patch.object(self.renderer, "restart", side_effect=boot), patch.object(
+                        self.renderer, "catalog", side_effect=AssertionError("No settings snapshot")) as catalog, patch.object(
+                        self.renderer, "request", side_effect=AssertionError("No automatic screen change")) as request:
                     self.timed_switch(identifier=mode, switchMode=mode,
                         **({"verificationMode": "manual", "passiveWaitSeconds": 1} if mode == "passive" else {}))
-                request.assert_called_once_with("set_state", test="ColorPatchesFull",
-                    settings=settings)
+                catalog.assert_not_called()
+                request.assert_not_called()
+                self.assertEqual(self.renderer.test, "StartOfTest")
                 self.assertEqual(self.service.status()["operation"]["phase"], "ready")
 
-    def test_modes_preserve_manual_test_without_requiring_start_screen(self):
-        for mode in ("active", "passive"):
-            with self.subTest(mode=mode):
-                self.controller.current = 1
-                self.renderer.test = "PanelCharacteristics"
-                self.service.input_writer = Mock(return_value={"accepted": True})
-                with patch.object(self.renderer, "request", wraps=self.renderer.request) as request:
-                    self.timed_switch(identifier=mode, switchMode=mode,
-                        **({"verificationMode": "manual", "passiveWaitSeconds": 1} if mode == "passive" else {}))
-                self.assertEqual(self.service.status()["operation"]["phase"], "ready")
-                self.assertEqual(self.renderer.test, "PanelCharacteristics")
-                self.assertEqual(request.call_args.kwargs["test"], "PanelCharacteristics")
-
-    def test_preserve_skips_startup_sentinels_and_rechecks_target_ranges(self):
-        self.renderer.test = "ColorPatchesFull"
+    def test_modes_accept_manual_screen_without_sending_screen_commands(self):
+        self.renderer.test = "PanelCharacteristics"
         self.service.input_writer = Mock(return_value={"accepted": True})
-        settings = {"color": "Green", "testingTier": 1000, "fullscreen": True, "textVisible": True,
-                    "staticContrastPq": 0, "activeDimmingPq": 0, "activeDimmingDarkPq": 0,
-                    "calibrationMaxPq": -1, "calibrationFullFramePq": -1, "calibrationMinPq": -1,
-                    "calibrationMaxSrgb": -1, "calibrationFullFrameSrgb": -1, "calibrationMinSrgb": -1,
-                    "staticContrastSrgb": 128, "profileIndex": 40}
-        ranges = {"staticContrastPq": (100, 750), "activeDimmingPq": (420, 488),
-                  "activeDimmingDarkPq": (208, 292), "profileIndex": (0, 51)}
-        ranges.update({name: (0, 1023 if name.endswith("Pq") else 255)
-                       for name in settings if name.startswith("calibration")})
-        source_schema = {name: {"minimum": low, "maximum": high} for name, (low, high) in ranges.items()}
-        target_schema = {**source_schema, "profileIndex": {"minimum": 0, "maximum": 32}}
-        snapshot = {**self.renderer.state(), "settings": settings}
-        with patch.object(self.renderer, "state", return_value=snapshot), patch.object(
-                self.renderer, "catalog", side_effect=[{"settingSchema": source_schema}, {"settingSchema": target_schema}]) as catalog, patch.object(
-                self.renderer, "request", wraps=self.renderer.request) as request:
+        with patch.object(self.renderer, "request") as request:
             self.timed_switch(switchMode="active")
-        self.assertEqual(catalog.call_count, 2)
-        restored = request.call_args.kwargs["settings"]
-        self.assertEqual(restored, {"color": "Green", "testingTier": 1000, "fullscreen": True,
-                                    "textVisible": True, "staticContrastSrgb": 128})
+        request.assert_not_called()
         self.assertEqual(self.service.status()["operation"]["phase"], "ready")
-
-    def test_source_catalog_failure_stops_before_any_switch_or_write(self):
-        self.service.input_writer = Mock(side_effect=AssertionError("DDC write forbidden"))
-        with patch.object(self.renderer, "catalog", side_effect=RuntimeError("catalog unavailable")):
-            self.switch(switchMode="active")
-        self.service.input_writer.assert_not_called()
-        self.assertEqual(self.controller.trials, [])
-        self.assertEqual(self.renderer.restart_count, 0)
-        self.assertIn("catalog unavailable", self.service.status()["operation"]["error"])
 
     def test_passive_inventory_pair_and_switch_never_access_ddc(self):
         self.input.side_effect = AssertionError("DDC read forbidden")
