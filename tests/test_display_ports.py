@@ -205,7 +205,7 @@ class PortTests(unittest.TestCase):
                     self.timed_switch(identifier=mode, switchMode=mode,
                         **({"verificationMode": "manual", "passiveWaitSeconds": 1} if mode == "passive" else {}))
                 request.assert_called_once_with("set_state", test="ColorPatchesFull",
-                    settings={**settings, "fullscreen": True, "textVisible": False})
+                    settings=settings)
                 self.assertEqual(self.service.status()["operation"]["phase"], "ready")
 
     def test_modes_preserve_manual_test_without_requiring_start_screen(self):
@@ -243,7 +243,7 @@ class PortTests(unittest.TestCase):
         self.assertEqual(catalog.call_count, 2)
         restored = request.call_args.kwargs["settings"]
         self.assertEqual(restored, {"color": "Green", "testingTier": 1000, "fullscreen": True,
-                                    "textVisible": False, "staticContrastSrgb": 128})
+                                    "textVisible": True, "staticContrastSrgb": 128})
         self.assertEqual(self.service.status()["operation"]["phase"], "ready")
 
     def test_source_catalog_failure_stops_before_any_switch_or_write(self):
@@ -274,7 +274,7 @@ class PortTests(unittest.TestCase):
         for fields in ({"switchMode": "other"}, {"switchMode": "active", "calibration": True},
                        {"switchMode": "active", "verificationMode": "manual"},
                        {"switchMode": "passive", "passiveWaitSeconds": 0},
-                       {"switchMode": "passive", "passiveWaitSeconds": 601},
+                       {"switchMode": "passive", "passiveWaitSeconds": 61},
                        {"switchMode": "passive", "passiveWaitSeconds": float("nan")}):
             with self.subTest(fields=fields), self.assertRaises(ValueError):
                 self.switch(**fields)
@@ -282,19 +282,64 @@ class PortTests(unittest.TestCase):
 
     def test_stability_failure_is_bounded_and_does_not_claim_ready(self):
         self.service.input_writer = Mock(return_value={"accepted": True})
-        original = self.renderer.state
+        original = self.controller.inspect
         reads = [0]
-        def state():
+        def inspect():
             reads[0] += 1
             result = original()
-            if reads[0] > 4:
-                result["display"]["hdr"] = False
+            if reads[0] > 3:
+                result["matchesDatabase"] = False
             return result
-        self.renderer.state = state
+        self.controller.inspect = inspect
         elapsed, result = self.timed_switch(switchMode="active")
         self.assertLessEqual(elapsed, 56)
         self.assertFalse(result["ready"])
         self.assertEqual(result["phase"], "failed")
+
+    def test_pure_switch_and_pair_skip_hdr_and_window_even_when_sdr_or_obscured(self):
+        self.renderer.hdr = False
+        self.hdr.enable.side_effect = AssertionError("Pure switching must not enable HDR")
+        self.window.bring_front.side_effect = AssertionError("Pure switching must not touch foreground")
+        self.service.input_writer = Mock(return_value={"accepted": True})
+        for mode, fields in (("active", {}), ("passive", {"verificationMode": "manual", "passiveWaitSeconds": 1}),
+                             ("pair", {"calibration": True})):
+            self.controller.current = 1
+            with self.subTest(mode=mode):
+                _, result = self.timed_switch(identifier=mode, switchMode=mode, **fields)
+                self.assertTrue(result["ready"], result)
+                self.assertFalse(result["hdr"])
+        self.hdr.enable.assert_not_called()
+        self.window.bring_front.assert_not_called()
+
+    def test_passive_wait_accepts_sixty_and_rejects_more(self):
+        elapsed, result = self.timed_switch(switchMode="passive", verificationMode="manual", passiveWaitSeconds=60)
+        self.assertTrue(result["timedReady"])
+        self.assertGreaterEqual(elapsed, 60)
+        with self.assertRaises(ValueError):
+            self.switch(identifier="invalid", switchMode="passive", verificationMode="manual", passiveWaitSeconds=61)
+
+    def test_prepare_test_enables_hdr_and_checks_foreground_without_replacing_switch_operation(self):
+        before = self.service.status()["operation"]
+        self.hdr.enable.return_value = {"changed": True}
+        result = self.service.prepare_test()
+        self.assertTrue(result["ready"])
+        self.assertTrue(result["hdr"])
+        self.hdr.enable.assert_called_once_with("00000000:00000063/1", "monitor-1")
+        self.assertEqual(self.renderer.restart_count, 1)
+        self.window.bring_front.assert_called_once_with(self.renderer.pid(), keep_on_top=True)
+        self.assertEqual(self.service.status()["operation"], before)
+
+    def test_prepare_test_rejects_hdr_off_obstruction_and_busy(self):
+        self.renderer.hdr = False
+        with self.assertRaisesRegex(RuntimeError, "HDR"):
+            self.service.prepare_test()
+        self.renderer.hdr = True
+        self.window.bring_front.return_value = {"unobstructed": False}
+        with self.assertRaisesRegex(RuntimeError, "obscured"):
+            self.service.prepare_test()
+        self.service.data["operation"]["phase"] = "running"
+        with self.assertRaisesRegex(ValueError, "running"):
+            self.service.prepare_test()
 
     def test_returns_running_then_cached_ready_without_backup(self):
         initial = self.switch()
@@ -714,6 +759,32 @@ class PathSelectionTests(unittest.TestCase):
 
 
 class PortHttpTests(unittest.TestCase):
+    def test_prepare_api_is_explicit_and_returns_preparation_without_forwarding_pipe(self):
+        instance = server.create_server("127.0.0.1", 0, 123)
+        service = Mock()
+        service.prepare_test.return_value = {"ready": True, "hdr": True, "window": {"unobstructed": True}, "state": {}}
+        instance.display_ports = service
+        thread = threading.Thread(target=instance.serve_forever, kwargs={"poll_interval": .01})
+        thread.start()
+        try:
+            for allowed, expected in ((False, 400), (True, 200)):
+                connection = http.client.HTTPConnection("127.0.0.1", instance.server_port, timeout=2)
+                try:
+                    body = json.dumps({"version": 1, "id": "prepare", "command": "prepare_display_test", "allowInterrupt": allowed})
+                    connection.request("POST", "/api", body, {"Content-Type": "application/json"})
+                    response = connection.getresponse()
+                    self.assertEqual(response.status, expected)
+                    result = json.loads(response.read())
+                    if allowed:
+                        self.assertTrue(result["preparation"]["ready"])
+                finally:
+                    connection.close()
+            service.prepare_test.assert_called_once_with()
+        finally:
+            instance.shutdown()
+            instance.server_close()
+            thread.join(2)
+
     def test_status_works_without_renderer_and_mutations_are_not_forwarded_when_busy(self):
         instance = server.create_server("127.0.0.1", 0, 123)
         service = Mock()

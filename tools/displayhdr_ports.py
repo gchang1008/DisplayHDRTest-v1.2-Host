@@ -210,7 +210,7 @@ class DisplayPortService:
             calibration, expected = request["calibration"], request["expectedInput"]
             verification = request.get("verificationMode", "ddc")
             wait = request.get("passiveWaitSeconds", 15)
-            if (type(wait) not in (int, float) or not math.isfinite(wait) or not 1 <= wait <= 600
+            if (type(wait) not in (int, float) or not math.isfinite(wait) or not 1 <= wait <= 60
                     or mode == "active" and (calibration or verification != "ddc")
                     or mode == "passive" and (verification != "manual" or expected is not None)):
                 raise ValueError("Invalid switch mode or passive waiting time.")
@@ -276,19 +276,13 @@ class DisplayPortService:
         duration = operation["waitSeconds"]
         deadline = time.monotonic() + duration + 45
         stable_since = None
-        pid = self.renderer.pid()
         while time.monotonic() < deadline:
             if self.closed:
                 raise RuntimeError("Input service closed while waiting for readiness.")
             current = controller.inspect()
-            state = self.renderer.state()
-            window = self.window_factory().bring_front(pid, keep_on_top=True)
             valid = (len(current["active"]["paths"]) == 1 and current.get("matchesDatabase")
                 and current["active"]["paths"][0]["targetKey"] == target
-                and current["active"]["paths"][0].get("monitorDevicePath") == identity
-                and self.renderer.pid() == pid and state.get("display", {}).get("hdr") is True
-                and all(state.get("presentation", {}).get(k) is True for k in ("presented", "resourcesValid"))
-                and window.get("unobstructed") is True)
+                and current["active"]["paths"][0].get("monitorDevicePath") == identity)
             if mode == "active":
                 reading = self.read_input()
                 valid = (valid and reading.get("ok") is True and reading.get("targetKey") == target
@@ -317,6 +311,32 @@ class DisplayPortService:
                 continue
             result[name] = value
         return result
+
+    def prepare_test(self):
+        with self.lock:
+            if self.closed or self.busy():
+                raise ValueError("A display-port operation is running or the service is closed.")
+            controller = self.controller_factory()
+            current = controller.inspect()
+            if len(current["active"]["paths"]) != 1 or not current.get("matchesDatabase"):
+                raise ValueError("Verify exactly one active display and its saved configuration before testing.")
+            active = current["active"]["paths"][0]
+            original = self.renderer.state()
+            settings = self.writable_settings(original["settings"])
+            hdr = self.hdr_factory().enable(active["targetKey"], active["monitorDevicePath"])
+            if hdr.get("changed"):
+                self.renderer.restart()
+            settings = self.writable_settings(settings)
+            state = self.renderer.request("set_state", test=original["test"]["id"],
+                settings={**settings, "fullscreen": True, "textVisible": False})
+            if state.get("display", {}).get("hdr") is not True:
+                raise RuntimeError("HDR mode was not confirmed before testing.")
+            if not all(state.get("presentation", {}).get(k) is True for k in ("presented", "resourcesValid")):
+                raise RuntimeError("Host window presentation was not confirmed before testing.")
+            window = self.window_factory().bring_front(self.renderer.pid(), keep_on_top=True)
+            if window.get("unobstructed") is not True:
+                raise RuntimeError("Host window is obscured or window status could not be verified before testing.")
+            return {"ready": True, "hdr": True, "window": window, "state": state}
 
     def work(self, request):
         operation = dict(self.data["operation"])
@@ -350,22 +370,24 @@ class DisplayPortService:
                 raise ValueError("Active target identity does not match the requested path.")
             if mode == "active" and active["targetKey"] == target:
                 raise ValueError("Active switching requires a different input for write verification.")
-            preserve = mode in ("active", "passive") and not request["calibration"]
+            pure = "switchMode" in request
+            preserve = pure and not request["calibration"]
             original_state = self.renderer.state() if preserve else None
             if original_state is not None:
                 original_state["settings"] = self.writable_settings(original_state["settings"])
             if not preserve:
-                self.renderer.request("set_state", test="StartOfTest", settings={"fullscreen": True})
+                self.renderer.request("set_state", test="StartOfTest", settings={} if pure else {"fullscreen": True})
             if mode == "active":
                 operation["write"] = self.input_writer(active["targetKey"], active["monitorDevicePath"], request["expectedInput"])
             if active["targetKey"] != target:
                 operation["selection"] = controller.trial(target, identity, None, save_to_database=True)
                 operation["portRestart"] = self.renderer.restart()
-            hdr = self.hdr_factory().enable(target, identity)
-            if hdr.get("changed"):
-                operation["hdrRestart"] = self.renderer.restart()
-            elif active["targetKey"] == target:
-                operation["freshRestart"] = self.renderer.restart()
+            if not pure:
+                hdr = self.hdr_factory().enable(target, identity)
+                if hdr.get("changed"):
+                    operation["hdrRestart"] = self.renderer.restart()
+                elif active["targetKey"] == target:
+                    operation["freshRestart"] = self.renderer.restart()
             if manual:
                 reading = {"ok": False, "currentValue": None,
                            "error": "Passive waiting does not verify the DUT input source." if mode == "passive"
@@ -379,18 +401,19 @@ class DisplayPortService:
                     or current["active"]["paths"][0].get("monitorDevicePath") != identity or not current.get("matchesDatabase")):
                 raise RuntimeError("The selected display configuration changed.")
             active_target = target
-            fields = {"settings": {"fullscreen": True, "textVisible": False}}
+            fields = {"settings": {} if pure else {"fullscreen": True, "textVisible": False}}
             if original_state is not None:
-                fields.update(test=original_state["test"]["id"], settings={**self.writable_settings(original_state["settings"]),
-                              "fullscreen": True, "textVisible": False})
+                fields.update(test=original_state["test"]["id"], settings=self.writable_settings(original_state["settings"]))
             state = self.renderer.request("set_state", **fields)
-            if request["command"] == "switch_display_port" and not state.get("display", {}).get("hdr"):
+            if not pure and not state.get("display", {}).get("hdr"):
                 raise RuntimeError("HDR mode was not confirmed after the port switch.")
             if not all(state.get("presentation", {}).get(k) is True for k in ("presented", "resourcesValid")):
                 raise RuntimeError("Host window presentation was not confirmed.")
-            window = self.window_factory().bring_front(self.renderer.pid(), keep_on_top=True)
-            if not window.get("unobstructed"):
-                raise RuntimeError("Host window is obscured or window status could not be verified.")
+            window = {}
+            if not pure:
+                window = self.window_factory().bring_front(self.renderer.pid(), keep_on_top=True)
+                if not window.get("unobstructed"):
+                    raise RuntimeError("Host window is obscured or window status could not be verified.")
             if mode in ("active", "passive"):
                 reading = self.wait_ready(controller, target, identity, request["expectedInput"], operation, mode, reading)
             with self.lock:

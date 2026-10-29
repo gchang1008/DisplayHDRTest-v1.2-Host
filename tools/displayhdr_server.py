@@ -131,6 +131,16 @@ class Handler(BaseHTTPRequestHandler):
                 ports = self.server.display_ports.dispatch(request)
                 self.reply(200, {"version": 1, "id": identifier, "ok": True, "displayPorts": ports})
                 return
+            if command == "prepare_display_test":
+                if (set(request) != {"version", "id", "command", "allowInterrupt"}
+                        or type(request.get("version")) is not int or request["version"] != 1
+                        or not isinstance(identifier, str) or not identifier or request["allowInterrupt"] is not True):
+                    raise ValueError("Test preparation requires version 1, an id and allowInterrupt=true.")
+                if self.server.display_ports is None:
+                    self.server.display_ports = DisplayPortService(Renderer(self.server))
+                preparation = self.server.display_ports.prepare_test()
+                self.reply(200, {"version": 1, "id": identifier, "ok": True, "preparation": preparation})
+                return
             if (self.server.display_ports is not None and self.server.display_ports.busy()
                     and command in ("set_state", "key", "restart_host")):
                 self.reply(409, failure(identifier, "display_port_busy", "A display-port operation is running; this command was not sent."))
