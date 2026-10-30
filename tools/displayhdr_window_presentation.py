@@ -4,9 +4,14 @@ Win32 references: SetForegroundWindow, SetWindowPos, GetWindow,
 SetThreadDpiAwarenessContext, and DwmGetWindowAttribute (Microsoft Learn).
 This is a window-state check, not proof of the monitor's optical output.
 """
+import argparse
 import ctypes as C
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
+import json
 import os
+from pathlib import Path
+import subprocess
+import sys
 import time
 
 HOST_CLASS = 'DisplayHDRComplianceTestsWindowClass'
@@ -143,19 +148,21 @@ class NativeWindowApi:
         if self.foreground() == hwnd and self.keyboard_focused(hwnd):
             return requested
         pid = U32()
-        target_thread = self.u.GetWindowThreadProcessId(hwnd, C.byref(pid))
-        self.check(target_thread)
         current_thread = self.kernel.GetCurrentThreadId()
-        attached = current_thread != target_thread
-        if attached:
-            self.check(self.u.AttachThreadInput(current_thread, target_thread, True))
-        try:
+        threads = []
+        for window in (self.foreground(), hwnd):
+            if window:
+                thread = self.u.GetWindowThreadProcessId(window, C.byref(pid))
+                self.check(thread)
+                if thread != current_thread and thread not in threads:
+                    threads.append(thread)
+        with ExitStack() as stack:
+            for thread in threads:
+                self.check(self.u.AttachThreadInput(current_thread, thread, True))
+                stack.callback(lambda tid: self.check(self.u.AttachThreadInput(current_thread, tid, False)), thread)
             requested = bool(self.u.SetForegroundWindow(hwnd))
             self.u.SetFocus(hwnd)  # A null return can mean there was no previous focus.
             return requested
-        finally:
-            if attached:
-                self.check(self.u.AttachThreadInput(current_thread, target_thread, False))
 
     def pin_window(self, hwnd):
         self.check(self.u.SetWindowPos(hwnd, HWND(-1), 0, 0, 0, 0, 0x53))
@@ -171,6 +178,7 @@ def overlaps(first, second):
 
 class WindowPresentation:
     def __init__(self, api=None):
+        self.isolated = api is None
         self.api = api if api is not None else NativeWindowApi()
 
     def _main(self, pid):
@@ -225,6 +233,22 @@ class WindowPresentation:
             return self._inspect(self._main(pid), pid)
 
     def bring_front(self, pid, keep_on_top=False):
+        if self.isolated:
+            if type(pid) is not int or not 0 < pid <= 0xFFFFFFFF:
+                raise ValueError('A valid renderer PID is required')
+            command = [sys.executable, '-B', str(Path(__file__).resolve()), '--pid', str(pid)]
+            if keep_on_top:
+                command.append('--keep-on-top')
+            try:
+                completed = subprocess.run(command, capture_output=True, text=True, encoding='utf-8',
+                                           timeout=5, creationflags=subprocess.CREATE_NO_WINDOW)
+            except subprocess.TimeoutExpired as exc:
+                raise TimeoutError('DisplayHDR foreground operation timed out after 5 seconds; current output retained.') from exc
+            result = json.loads(completed.stdout)
+            if completed.returncode or not isinstance(result, dict) or result.get('pid') != pid:
+                error = result.get('error', 'Renderer window could not be verified') if isinstance(result, dict) else 'Invalid window worker response'
+                raise RuntimeError(str(error)[:1024])
+            return result
         with self.api.coordinates():
             hwnd = self._main(pid)
             host = self.api.info(hwnd, client=True)
@@ -250,3 +274,15 @@ class WindowPresentation:
             self._verify(hwnd, pid)
             self.api.unpin_window(hwnd)
             return self._inspect(hwnd, pid)
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--pid', type=int, required=True)
+    parser.add_argument('--keep-on-top', action='store_true')
+    args = parser.parse_args()
+    try:
+        print(json.dumps(WindowPresentation(NativeWindowApi()).bring_front(args.pid, args.keep_on_top)))
+    except Exception as exc:
+        print(json.dumps({'error': str(exc)[:1024]}))
+        raise SystemExit(1)

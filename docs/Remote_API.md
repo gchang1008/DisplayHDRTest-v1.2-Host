@@ -166,4 +166,4 @@ Host 保留本機互斥、底層有界逾時與同一請求 id 不重複執行�
 整套工作流程 API `switch_display_port` 與 `prepare_display_test` 已移除，舊呼叫會被拒絕，需同步更新呼叫端。Windows HDR 啟用與 renderer 啟動的本機確認仍有底層逾時，與來源穩定／測試等待策略不同。官方測試圖樣、時序及量測規則不變。
 
 
-`present_display_window` 在完成置頂後要求前景與鍵盤焦點，使用 GetGUIThreadInfo 查詢 renderer 執行緒的實際焦點。一般要求未達成時，暫時連接呼叫端與 renderer 的輸入佇列以執行 SetForegroundWindow／SetFocus，隨後解除；不連接其他程式的前景執行緒。Windows 仍可能拒絕要求，實際驗證結果為準；不修改官方 renderer 或模擬左右鍵。
+`present_display_window` 在完成置頂後要求前景與鍵盤焦點，使用 GetGUIThreadInfo 查詢 renderer 執行緒的實際焦點。一般要求未達成時，暫時連接呼叫端、目前前景及 renderer 執行緒的輸入佇列以執行 SetForegroundWindow／SetFocus，隨後逆序解除。整個置前與檢查操作在獨立程序執行，逾時上限 5 秒；逾時終止該程序並回報錯誤，不重送操作或還原輸出。Windows 仍可能拒絕要求，實際驗證結果為準；不修改官方 renderer 或模擬左右鍵。
