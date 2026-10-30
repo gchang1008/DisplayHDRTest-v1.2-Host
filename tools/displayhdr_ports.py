@@ -11,10 +11,11 @@ from displayhdr_display_paths import (DisplayPaths, Header, TargetName, QDC_ALL_
 from displayhdr_hdr_control import HdrControl
 from displayhdr_monitor_input import InputIdentityError, probe_native, write_native
 from displayhdr_window_presentation import WindowPresentation
+from displayhdr_edid import read_edid
 
 
 COMMANDS = {"get_display_ports", "get_display_port_status", "set_display_output",
-            "write_display_input", "enable_display_hdr", "present_display_window"}
+            "write_display_input", "enable_display_hdr", "present_display_window", "get_display_edid"}
 
 
 def edid_hash(device_path):
@@ -44,11 +45,12 @@ class Renderer:
 class DisplayPortService:
     def __init__(self, renderer, controller_factory=DisplayPaths,
                  input_reader=probe_native, hdr_factory=HdrControl, window_factory=WindowPresentation,
-                 input_writer=write_native):
+                 input_writer=write_native, edid_reader=read_edid):
         self.renderer = renderer
         self.controller_factory, self.input_reader = controller_factory, input_reader
         self.hdr_factory, self.window_factory = hdr_factory, window_factory
         self.input_writer = input_writer
+        self.edid_reader = edid_reader
         self.switch_mode = "pair"
         self.skip_ddc = False
         self.lock = threading.RLock()
@@ -156,6 +158,8 @@ class DisplayPortService:
         query = command in ("get_display_ports", "get_display_port_status")
         expected = common | ({"switchMode"} if "switchMode" in request else set()) if query else common | {
             "allowInterrupt", "targetKey", "monitorDevicePath"}
+        if command == "get_display_edid":
+            expected.remove("allowInterrupt")
         if command == "write_display_input":
             expected.add("value")
         if command not in COMMANDS or set(request) != expected or type(request.get("version")) is not int or request["version"] != 1 or not isinstance(request.get("id"), str) or not request["id"]:
@@ -165,7 +169,7 @@ class DisplayPortService:
             raise ValueError("Unknown inventory mode.")
         if query:
             return self.inventory(mode) if command == "get_display_ports" else self.status()
-        if request["allowInterrupt"] is not True:
+        if command != "get_display_edid" and request["allowInterrupt"] is not True:
             raise ValueError("Explicit allowInterrupt=true is required.")
         if not all(isinstance(request[k], str) and request[k] for k in ("targetKey", "monitorDevicePath")):
             raise ValueError("A display endpoint and device identity are required.")
@@ -201,7 +205,13 @@ class DisplayPortService:
                     raise ValueError("Requested display identity does not match the connected output.")
                 if command != "set_display_output" and (active[0]["targetKey"] != target or active[0].get("monitorDevicePath") != identity):
                     raise ValueError("Operation requires the requested active display identity.")
-                if command == "set_display_output":
+                if command == "get_display_edid":
+                    result = self.edid_reader(identity)
+                    after = controller.inspect()["active"]["paths"]
+                    if (len(after) != 1 or after[0]["targetKey"] != target
+                            or after[0].get("monitorDevicePath") != identity):
+                        raise ValueError("Active display identity changed during EDID reading.")
+                elif command == "set_display_output":
                     changed = len(active) != 1 or active[0]["targetKey"] != target
                     result = {"changed": changed}
                     if changed:

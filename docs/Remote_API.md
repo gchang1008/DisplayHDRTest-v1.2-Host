@@ -155,6 +155,22 @@ HTTP bridge 的 `POST /api` 提供獨立操作，不改動官方圖樣、計時�
 
 Host 保留本機互斥、底層有界逾時與同一請求 id 不重複執行保護；未知結果或失敗不自動重送、不補償、不自動還原輸出。同 id 不可改變內容。這些保護僅涵蓋單次本機指令；呼叫端須阻擋量測期間的操作，並在多步驟間重新核對身分與結果。
 
+### EDID 原始資料查詢
+
+`get_display_edid` 是唯讀查詢，只接受 `version:1`、非空 `id`、`command`、`targetKey`、`monitorDevicePath`，不接受 `allowInterrupt`。指定身分須符合目前唯一啟用的 Windows 輸出，讀取前後均核對；不改顯示配置、HDR、視窗或 DDC/CI 來源。
+
+```json
+{"version":1,"id":"edid-1","command":"get_display_edid","targetKey":"adapter/target","monitorDevicePath":"device path"}
+```
+
+成功回覆為 `{"version":1,"id":"edid-1","ok":true,"edid":{...}}`。`edid` 包含 `targetKey`、`monitorDevicePath`、`dataBase64`（原始 bytes 的 Base64）、`source`（`wmi`、`registry` 或 `unavailable`）、`byteLength`、`expectedLength`（無基礎區塊時為 null）、`complete`、`checksumsValid`、`warnings`（字串陣列）。`complete` 僅表示資料長度等於基礎區塊宣告的 `(extension count + 1) × 128`；標頭或 checksum 錯誤另列警告，不修補資料。
+
+優先透過 Windows `WmiMonitorDescriptorMethods.WmiGetMonitorRawEEdidV1Block` 逐一讀取所有宣告區塊，不固定限制 256 bytes。固定 PowerShell worker 上限 8 秒，保留逾時前已取得的連續區塊；不重送讀取。不完整時可選用同一端點較長的登錄 EDID，回報 `source:registry` 及快取來源警告，不與 WMI 區塊拼接；已有 WMI 基礎區塊時，登錄基礎區塊須完全相同才可替代。Windows 驅動提供的 EDID 可能包含快取或 override，不宣稱為直接向面板 EEPROM 即時讀取。
+
+缺少區塊、checksum 錯誤或無法讀取均回覆 `ok:true`，保留實際原始內容並列出原因，由呼叫端顯示警告及決定測試策略。身分不符、讀取期間輸出改變、欄位錯誤或本機操作忙碌仍拒絕。資料保存與跨 Input 排程由 Client 負責。
+
+原廠依據：[WmiGetMonitorRawEEdidV1Block](https://learn.microsoft.com/en-us/windows/win32/wmicoreprov/wmigetmonitorraweedidv1block-wmimonitordescriptormethods)、[Windows EDID 格式與 override](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/overriding-monitor-edids)。
+
 ### 呼叫端流程責任
 
 - 配對：呼叫端指定起始畫面、選擇 Windows 輸出、必要重啟、輪詢來源及命名。Host 不追加畫面指令。

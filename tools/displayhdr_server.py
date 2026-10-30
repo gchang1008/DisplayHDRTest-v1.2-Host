@@ -14,7 +14,7 @@ from displayhdr_supervisor import Supervisor
 from displayhdr_ports import COMMANDS as PORT_COMMANDS, DisplayPortService, Renderer
 
 
-MUTATION_COMMANDS = {"set_state", "key"} | (PORT_COMMANDS - {"get_display_ports", "get_display_port_status"})
+MUTATION_COMMANDS = {"set_state", "key"} | (PORT_COMMANDS - {"get_display_ports", "get_display_port_status", "get_display_edid"})
 
 def failure(identifier, code, message, uncertain=False):
     return {"version": 1, "id": identifier, "ok": False,
@@ -123,7 +123,8 @@ class Handler(BaseHTTPRequestHandler):
                     self.server.display_ports = DisplayPortService(Renderer(self.server))
                 ports = self.server.display_ports.dispatch(request)
                 self.reply(200, {"version": 1, "id": identifier, "ok": True,
-                    ("displayPorts" if command in ("get_display_ports", "get_display_port_status") else "action"): ports})
+                    ("displayPorts" if command in ("get_display_ports", "get_display_port_status")
+                     else "edid" if command == "get_display_edid" else "action"): ports})
                 return
             if command in ("prepare_display_test", "switch_display_port"):
                 raise ValueError("Update the Client; workflow control now belongs to the Client.")
