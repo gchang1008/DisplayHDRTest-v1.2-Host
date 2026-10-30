@@ -149,7 +149,7 @@ HTTP bridge 的 `POST /api` 提供獨立操作，不改動官方圖樣、計時�
 | `set_display_output` | 無 | 儲存及啟用指定單一 Windows 輸出；回報 `changed`，不重啟 renderer、不改測試畫面。 |
 | `write_display_input` | `value`，整數1–255 | 對指定的目前啟用輸出送一次 VCP 0x60 寫入；回報 `accepted`，不切 Windows 配置、不等待來源穩定。 |
 | `enable_display_hdr` | 無 | 啟用目前指定輸出的 Windows HDR，回報 `changed`；不重啟 renderer、不改畫面或視窗。 |
-| `present_display_window` | 無 | 將目前 renderer 帶到前景及置頂，回報幾何遮擋結果 `unobstructed`；不切畫面或更動 HDR。 |
+| `present_display_window` | 無 | 將目前 renderer 帶到前景及置頂並嘗試取得鍵盤焦點，回報 `unobstructed`、`topmost`、`foreground`、`keyboardFocused` 布林值；呼叫端須全部核對為 true。`unobstructed` 只表示幾何遮擋結果，不代表取得鍵盤焦點。不切畫面或更動 HDR。 |
 
 回覆為 `{"version":1,"id":"...","ok":true,"action":{"command":"...","targetKey":"...","monitorDevicePath":"...",...}}`。只有 set_display_output 可指定未啟用但已連接的輸出；其他操作必須符合目前唯一啟用輸出身分。所有操作驗證 Windows 已儲存配置與實際配置一致。`set_display_output` 可從多啟用輸出收斂為指定的唯一輸出，即使目標已是多個啟用輸出之一，也會套用單一路徑並回報 `changed:true`。零啟用輸出、未受啟動器管理、配置不符或身分不符時拒絕選取；其餘操作仍拒絕多啟用輸出。欄位錯誤或同時操作仍會被拒絕。
 
@@ -164,3 +164,6 @@ Host 保留本機互斥、底層有界逾時與同一請求 id 不重複執行�
 - Restart：Host 只處理程序；呼叫端決定後續視窗處理。
 
 整套工作流程 API `switch_display_port` 與 `prepare_display_test` 已移除，舊呼叫會被拒絕，需同步更新呼叫端。Windows HDR 啟用與 renderer 啟動的本機確認仍有底層逾時，與來源穩定／測試等待策略不同。官方測試圖樣、時序及量測規則不變。
+
+
+`present_display_window` 在完成置頂後要求前景與鍵盤焦點，使用 GetGUIThreadInfo 查詢 renderer 執行緒的實際焦點。一般要求未達成時，暫時連接呼叫端與 renderer 的輸入佇列以執行 SetForegroundWindow／SetFocus，隨後解除；不連接其他程式的前景執行緒。Windows 仍可能拒絕要求，實際驗證結果為準；不修改官方 renderer 或模擬左右鍵。

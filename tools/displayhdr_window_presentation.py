@@ -21,6 +21,12 @@ class Point(C.Structure):
     _fields_ = [('x', I32), ('y', I32)]
 
 
+class GuiThreadInfo(C.Structure):
+    _fields_ = [('cbSize', U32), ('flags', U32), ('hwndActive', HWND), ('hwndFocus', HWND),
+                ('hwndCapture', HWND), ('hwndMenuOwner', HWND), ('hwndMoveSize', HWND),
+                ('hwndCaret', HWND), ('rcCaret', Rect)]
+
+
 class NativeWindowApi:
     def __init__(self):
         if os.name != 'nt':
@@ -44,9 +50,14 @@ class NativeWindowApi:
             'ShowWindow': ([HWND, I32], I32),
             'SetWindowPos': ([HWND, HWND, I32, I32, I32, I32, U32], I32),
             'SetForegroundWindow': ([HWND], I32),
+            'GetGUIThreadInfo': ([U32, C.POINTER(GuiThreadInfo)], I32),
+            'AttachThreadInput': ([U32, U32, I32], I32),
+            'SetFocus': ([HWND], HWND),
         }
         for name, (arguments, result) in declarations.items():
             getattr(self.u, name).argtypes, getattr(self.u, name).restype = arguments, result
+        self.kernel = C.WinDLL('kernel32')
+        self.kernel.GetCurrentThreadId.argtypes, self.kernel.GetCurrentThreadId.restype = [], U32
         self.dwm.DwmGetWindowAttribute.argtypes = [HWND, U32, C.c_void_p, U32]
         self.dwm.DwmGetWindowAttribute.restype = I32
 
@@ -119,8 +130,32 @@ class NativeWindowApi:
     def raise_window(self, hwnd):
         self.check(self.u.SetWindowPos(hwnd, HWND(0), 0, 0, 0, 0, 0x43))
 
+    def keyboard_focused(self, hwnd):
+        pid, info = U32(), GuiThreadInfo()
+        thread = self.u.GetWindowThreadProcessId(hwnd, C.byref(pid))
+        self.check(thread)
+        info.cbSize = C.sizeof(info)
+        self.check(self.u.GetGUIThreadInfo(thread, C.byref(info)))
+        return info.hwndFocus == hwnd
+
     def set_foreground(self, hwnd):
-        return bool(self.u.SetForegroundWindow(hwnd))
+        requested = bool(self.u.SetForegroundWindow(hwnd))
+        if self.foreground() == hwnd and self.keyboard_focused(hwnd):
+            return requested
+        pid = U32()
+        target_thread = self.u.GetWindowThreadProcessId(hwnd, C.byref(pid))
+        self.check(target_thread)
+        current_thread = self.kernel.GetCurrentThreadId()
+        attached = current_thread != target_thread
+        if attached:
+            self.check(self.u.AttachThreadInput(current_thread, target_thread, True))
+        try:
+            requested = bool(self.u.SetForegroundWindow(hwnd))
+            self.u.SetFocus(hwnd)  # A null return can mean there was no previous focus.
+            return requested
+        finally:
+            if attached:
+                self.check(self.u.AttachThreadInput(current_thread, target_thread, False))
 
     def pin_window(self, hwnd):
         self.check(self.u.SetWindowPos(hwnd, HWND(-1), 0, 0, 0, 0, 0x53))
@@ -172,10 +207,15 @@ class WindowPresentation:
         foreground = self.api.foreground() == hwnd
         rect = host['clientRect']
         topmost = host.get('topmost', False)
+        try:
+            focused = self.api.keyboard_focused(hwnd)
+        except OSError as exc:
+            focused = False
+            errors.append(str(exc))
         unobstructed = (host['visible'] and not host['minimized'] and host['cloaked'] is False
                         and (foreground or topmost)
                         and rect[2] > rect[0] and rect[3] > rect[1] and not blockers and not errors)
-        return {'checkedAt': time.time(), 'pid': pid, 'hwnd': hwnd, 'foreground': foreground,
+        return {'checkedAt': time.time(), 'pid': pid, 'hwnd': hwnd, 'foreground': foreground, 'keyboardFocused': focused,
                 'visible': host['visible'], 'minimized': host['minimized'], 'clientRect': rect,
                 'topmost': topmost,
                 'possibleObstructions': blockers, 'inspectionErrors': errors, 'unobstructed': unobstructed}
@@ -194,10 +234,11 @@ class WindowPresentation:
             self._verify(hwnd, pid)
             self.api.raise_window(hwnd)
             self._verify(hwnd, pid)
-            requested = self.api.set_foreground(hwnd)
             if keep_on_top:
                 self._verify(hwnd, pid)
                 self.api.pin_window(hwnd)
+            self._verify(hwnd, pid)
+            requested = self.api.set_foreground(hwnd)
             result = self._inspect(hwnd, pid)
             result['foregroundRequestAccepted'] = requested
             result['verificationTopmostRequested'] = keep_on_top
