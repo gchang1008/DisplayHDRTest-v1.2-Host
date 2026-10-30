@@ -53,7 +53,7 @@ class DisplayPortService:
         self.skip_ddc = False
         self.lock = threading.RLock()
         self.closed = False
-        self.data = {"supported": False, "manualSupported": False, "targets": [], "activeTargetKey": "", "input": {},
+        self.data = {"supported": False, "manualSupported": False, "outputSelectionSupported": False, "targets": [], "activeTargetKey": "", "input": {},
                      "pendingRestore": False, "operation": self.operation()}
         self.seen = set()
         self.running = False
@@ -70,7 +70,7 @@ class DisplayPortService:
         with self.lock:
             self.data["pendingRestore"] = False
             result = json.loads(json.dumps({name: self.data[name] for name in
-                ("supported", "manualSupported", "targets", "activeTargetKey", "input", "pendingRestore")}))
+                ("supported", "manualSupported", "outputSelectionSupported", "targets", "activeTargetKey", "input", "pendingRestore")}))
             result["switchModes"] = ["active", "passive"]
             result["controlOwner"] = "client"
             result["operation"] = {name: value for name, value in self.data["operation"].items()
@@ -120,6 +120,10 @@ class DisplayPortService:
                     "connection": {5: "HDMI", 10: "DisplayPort / USB-C"}.get(path.target.technology, "Other"),
                     "active": target_key in active_keys, "available": True, "edidHash": edid_hash(identity)}
             reading = self.read_input() if len(active_keys) == 1 else {"ok": False, "error": "Enable exactly one display before calibration.", "currentValue": None}
+            configuration = controller.inspect()
+            selection_supported = (self.renderer.restart_supported() and bool(active_keys)
+                                   and active_keys.issubset(targets) and bool(configuration.get("matchesDatabase"))
+                                   and all(t["monitorDevicePath"] for t in targets.values()))
             error = ""
             if not self.renderer.restart_supported():
                 error = "Port switching requires a managed Host launcher."
@@ -130,7 +134,7 @@ class DisplayPortService:
             elif (reading.get("ok") is True and (reading.get("targetKey") not in active_keys or
                     reading.get("monitorDevicePath") != targets.get(reading.get("targetKey"), {}).get("monitorDevicePath"))):
                 error = "DDC/CI display identity does not match the active output."
-            elif not controller.inspect().get("matchesDatabase"):
+            elif not configuration.get("matchesDatabase"):
                 error = "Active and saved display configurations differ; verify Windows display settings."
             manual_supported = not error
             if self.switch_mode != "passive" and not error and (not reading.get("ok") or type(reading.get("currentValue")) is not int
@@ -138,7 +142,8 @@ class DisplayPortService:
                 error = reading.get("error") or "DUT input value could not be confirmed."
             self.data.update(targets=list(targets.values()), input=reading,
                              activeTargetKey=next(iter(active_keys)) if len(active_keys) == 1 else "",
-                             supported=not error, manualSupported=manual_supported, error=error)
+                             supported=not error, manualSupported=manual_supported,
+                             outputSelectionSupported=bool(selection_supported), error=error)
             if self.data["supported"] and self.data["operation"]["phase"] == "failed":
                 self.data["operation"] = self.operation()
             return self.status()
@@ -180,11 +185,15 @@ class DisplayPortService:
             self.seen.add(identifier)
             self.running = True
             try:
+                if command == "set_display_output" and not self.renderer.restart_supported():
+                    raise ValueError("Output selection requires a managed Host launcher.")
                 controller = self.controller_factory()
                 current = controller.inspect()
                 active = current["active"]["paths"]
-                if len(active) != 1 or not current.get("matchesDatabase"):
-                    raise ValueError("Exactly one active output and matching Windows configuration are required.")
+                if not active or not current.get("matchesDatabase"):
+                    raise ValueError("Active output and matching Windows configuration are required.")
+                if command != "set_display_output" and len(active) != 1:
+                    raise ValueError("Exactly one active output is required for this operation.")
                 target, identity = request["targetKey"], request["monitorDevicePath"]
                 selected = next((p for p in controller.api.query(QDC_ALL_PATHS).paths
                                  if p.target.available and key(p.target) == target), None)
@@ -193,7 +202,7 @@ class DisplayPortService:
                 if command != "set_display_output" and (active[0]["targetKey"] != target or active[0].get("monitorDevicePath") != identity):
                     raise ValueError("Operation requires the requested active display identity.")
                 if command == "set_display_output":
-                    changed = active[0]["targetKey"] != target
+                    changed = len(active) != 1 or active[0]["targetKey"] != target
                     result = {"changed": changed}
                     if changed:
                         result["selection"] = controller.trial(target, identity, None, save_to_database=True)

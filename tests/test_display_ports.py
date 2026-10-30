@@ -222,9 +222,9 @@ class NativeWriteTests(unittest.TestCase):
 
 class PathSelectionTests(unittest.TestCase):
     def test_manual_selection_without_checkpoint_never_restores_even_after_apply_error(self):
-        for fail in (False, True):
-            with self.subTest(fail=fail):
-                current = [1]
+        for fail, starting in ((False, (1,)), (True, (1,)), (False, (1, 2)), (True, (1, 2))):
+            with self.subTest(fail=fail, starting=starting):
+                current = list(starting)
                 calls = []
 
                 def snapshot(ids):
@@ -308,3 +308,77 @@ class PortHttpTests(unittest.TestCase):
             instance.shutdown()
             instance.server_close()
             thread.join(2)
+
+
+class MultiController(Controller):
+    def __init__(self):
+        super().__init__()
+        self.active_ids = [1, 2]
+        self.matches_database = True
+
+    def query(self, flags):
+        result = super().query(paths.QDC_ALL_PATHS)
+        if flags != paths.QDC_ALL_PATHS:
+            result.paths = [p for p in result.paths if p.target.id in self.active_ids]
+        return result
+
+    def inspect(self):
+        return {"active": {"paths": [{"targetKey": f"00000000:00000063/{i}",
+                "monitorDevicePath": f"monitor-{i}"} for i in self.active_ids]},
+                "matchesDatabase": self.matches_database}
+
+    def trial(self, target, identity, hold, save_to_database):
+        result = super().trial(target, identity, hold, save_to_database)
+        self.active_ids = [self.current]
+        return result
+
+
+class MultiOutputTests(unittest.TestCase):
+    action = PortTests.action
+
+    def setUp(self):
+        PortTests.setUp(self)
+        self.controller = MultiController()
+        self.service.controller_factory = lambda: self.controller
+
+    def test_multi_inventory_allows_selection_but_not_ddc_or_manual_readiness(self):
+        result = self.service.inventory("pair")
+        self.assertTrue(result["outputSelectionSupported"])
+        self.assertFalse(result["supported"])
+        self.assertFalse(result["manualSupported"])
+        self.assertEqual(result["activeTargetKey"], "")
+        self.input.assert_not_called()
+
+    def test_select_active_target_collapses_multi_without_other_actions(self):
+        result = self.action("set_display_output", target=1)
+        self.assertTrue(result["changed"])
+        self.assertEqual(self.controller.active_ids, [1])
+        self.assertEqual(len(self.controller.trials), 1)
+        for method in (self.input, self.writer, self.hdr.enable, self.window.bring_front):
+            method.assert_not_called()
+        self.assertEqual(self.renderer.restart_count, 0)
+
+    def test_multiple_outputs_reject_other_actions(self):
+        for command in ("write_display_input", "enable_display_hdr", "present_display_window"):
+            with self.subTest(command=command), self.assertRaises(ValueError):
+                self.action(command, identifier=command, **({"value": 18} if command == "write_display_input" else {}))
+        self.assertEqual(self.controller.trials, [])
+        self.writer.assert_not_called()
+        self.hdr.enable.assert_not_called()
+        self.window.bring_front.assert_not_called()
+
+    def test_zero_outputs_database_mismatch_and_unmanaged_host_cannot_bootstrap(self):
+        for invalid in ("zero", "database", "unmanaged"):
+            with self.subTest(invalid=invalid):
+                self.controller.active_ids = [] if invalid == "zero" else [1, 2]
+                self.controller.matches_database = invalid != "database"
+                self.renderer.managed = invalid != "unmanaged"
+                self.assertFalse(self.service.inventory("passive")["outputSelectionSupported"])
+                with self.assertRaises(ValueError):
+                    self.action("set_display_output", identifier=invalid)
+        self.assertEqual(self.controller.trials, [])
+
+    def test_multi_wrong_device_identity_is_rejected(self):
+        with self.assertRaises(ValueError):
+            self.action("set_display_output", monitorDevicePath="wrong-device")
+        self.assertEqual(self.controller.trials, [])

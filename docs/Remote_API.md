@@ -136,7 +136,7 @@ HTTP bridge 的 `POST /api` 提供獨立操作，不改動官方圖樣、計時�
 
 `get_display_ports` 唯讀盤點端點、EDID雜湊、Windows唯一啟用輸出與當次DDC/CI值，回覆 `displayPorts`。端點包含 `targetKey`、`monitorDevicePath`、`name`、`connection`、`active`、`available`、`edidHash`；adapter LUID可能在重開機後改變，不能當永久識別。顯示器輸入名稱與數值的對應由呼叫端配對，不推定26必為USB-C。缺少可靠EDID、同型號裝置或交換線材時，仍可能需要人工核對。
 
-`manualSupported` 只表示Windows單一路徑、儲存配置及可重啟Host符合操作條件，不表示DDC/CI可用或面板來源已確認。有效DDC回覆若不符合目前Windows裝置身分會回報錯誤；暫時無法讀取不代表可以猜測來源。Host不建立Input狀態檔或鎖定檔，不自動還原或復用舊備份；`pendingRestore` 固定false，只供格式相容。
+`outputSelectionSupported` 表示目前有可驗證的啟用輸出、可用端點及相符的 Windows 已儲存配置，且 Host 可由啟動器管理；多輸出時也可為 true，僅允許先選定唯一輸出，不代表已可確認來源。`manualSupported` 仍只表示Windows單一路徑、儲存配置及可重啟Host符合操作條件，不表示DDC/CI可用或面板來源已確認。有效DDC回覆若不符合目前Windows裝置身分會回報錯誤；暫時無法讀取不代表可以猜測來源。Host不建立Input狀態檔或鎖定檔，不自動還原或復用舊備份；`pendingRestore` 固定false，只供格式相容。
 
 輸出控制由呼叫端負責順序與就緒策略。`get_display_ports` 接受可選 `switchMode: pair/active/passive`；Passive 不讀寫 DDC/CI，其餘只讀取當次來源，不等待穩定。`get_display_port_status` 回傳快取。回覆 `controlOwner: client` 表示支援以下獨立操作。`operation` 保留空的 idle 結構供格式相容，不表示測試就緒。
 
@@ -151,7 +151,7 @@ HTTP bridge 的 `POST /api` 提供獨立操作，不改動官方圖樣、計時�
 | `enable_display_hdr` | 無 | 啟用目前指定輸出的 Windows HDR，回報 `changed`；不重啟 renderer、不改畫面或視窗。 |
 | `present_display_window` | 無 | 將目前 renderer 帶到前景及置頂，回報幾何遮擋結果 `unobstructed`；不切畫面或更動 HDR。 |
 
-回覆為 `{"version":1,"id":"...","ok":true,"action":{"command":"...","targetKey":"...","monitorDevicePath":"...",...}}`。只有 set_display_output 可指定未啟用但已連接的輸出；其他操作必須符合目前唯一啟用輸出身分。所有操作驗證 Windows 已儲存配置與實際配置一致。未授權、身分不符、多啟用輸出、欄位錯誤或同時操作會被拒絕。
+回覆為 `{"version":1,"id":"...","ok":true,"action":{"command":"...","targetKey":"...","monitorDevicePath":"...",...}}`。只有 set_display_output 可指定未啟用但已連接的輸出；其他操作必須符合目前唯一啟用輸出身分。所有操作驗證 Windows 已儲存配置與實際配置一致。`set_display_output` 可從多啟用輸出收斂為指定的唯一輸出，即使目標已是多個啟用輸出之一，也會套用單一路徑並回報 `changed:true`。零啟用輸出、未受啟動器管理、配置不符或身分不符時拒絕選取；其餘操作仍拒絕多啟用輸出。欄位錯誤或同時操作仍會被拒絕。
 
 Host 保留本機互斥、底層有界逾時與同一請求 id 不重複執行保護；未知結果或失敗不自動重送、不補償、不自動還原輸出。同 id 不可改變內容。這些保護僅涵蓋單次本機指令；呼叫端須阻擋量測期間的操作，並在多步驟間重新核對身分與結果。
 
