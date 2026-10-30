@@ -121,7 +121,7 @@ HTTP 請求行與標頭的接收期限合計 5 秒，正文另有 5 秒接收期
 - `status`：`starting`（等待啟動）、`restarting`（關閉舊程序）、`ready`、`stopped`（正常結束）、`failed`（啟動失敗或異常結束）。
 - `pid`：目前或最近一次啟動的程序識別值；尚未成功啟動時可為 null。`error` 提供失敗原因。
 - `restart_host` 非同步執行，成功回覆只表示已接受；必須查詢到 `ready` 並成功取得 `get_state`，才能確認恢復控制。
-- `restart_host` 在新程序就緒後會將 DisplayHDR 視窗帶到前景並置頂，確認無其他視窗遮擋才回報 `ready`。遮擋或視窗檢查失敗回報 `failed` 與具體錯誤，保留已啟動的程序，不自動關閉或重啟；可明確再次要求 Restart。查詢狀態不會重複拉回前景，也不會改變測試圖樣或強制藍色。這項處理不加入 Input 切換內部的重啟，該流程保留自己的視窗確認。
+- `restart_host` 只重啟受管理的 renderer，回報新程序啟動狀態，不置頂、檢查遮擋或恢復畫面。呼叫端決定是否另送視窗呈現指令。
 - 重啟先正常關閉服務啟動的程序；等待 5 秒仍未退出時終止該程序，再啟動相同執行檔與 `--api`。不關閉其他 DisplayHDR 程序。
 - 程式尚未 ready 時，圖樣操作／查詢回覆 HTTP 503、`host_unavailable`，不轉送操作。狀態查詢仍可用。
 - 兩個新指令只接受 version、id、command；額外欄位、重複重啟及附掛模式的重啟要求回覆 400。`--pid` 附掛模式的 `restartSupported` 為 false；附掛程序結束後仍會更新程序狀態，但不會關閉或重啟附掛程序。
@@ -130,66 +130,37 @@ HTTP 請求行與標頭的接收期限合計 5 秒，正文另有 5 秒接收期
 - 本功能需要支援 `restart_host` 的 Host 整合包。
 
 查詢程序狀態時，使用 `get_host_status`；重新啟動測試程式時，使用 `restart_host`。
-## 手動 DUT Input Port 配對與切換
+## 本機顯示操作 API
 
-此功能由 HTTP bridge 的 `POST /api` 處理，不改變官方圖樣、計時或量測流程。使用 Windows 原生 DDC/CI 查詢 VCP `0x60`，不需外部螢幕控制工具或部署代理。僅支援由 `StartDisplayHDR.cmd` 管理的可重啟 Host，初始桌面須只有一條啟用顯示路徑；所有待配對輸入可以預先接線。DUT 必須開啟 Auto Switch；DDC 模式另須開啟 DDC/CI。軟體無法讀取 OSD 的 Auto Switch 設定，必須由使用者確認。螢幕、顯卡或線材不支援有效 DDC/CI 輸入讀值時，不提供自動確認；使用者可明確選擇人工確認模式繼續，但每次仍須對照 OSD 與實際畫面確認來源。
+HTTP bridge 的 `POST /api` 提供獨立操作，不改動官方圖樣、計時或量測規則；DDC/CI使用Windows原生VCP 0x60，不需外部控制工具。`get_host_status` 回報 `displayPortControl: true`、`portPrimitives: true` 能力。
 
-所有命令使用既有 `version: 1`、非空字串 `id` 與 `command` 欄位，且只接受下列額外欄位：
+`get_display_ports` 唯讀盤點端點、EDID雜湊、Windows唯一啟用輸出與當次DDC/CI值，回覆 `displayPorts`。端點包含 `targetKey`、`monitorDevicePath`、`name`、`connection`、`active`、`available`、`edidHash`；adapter LUID可能在重開機後改變，不能當永久識別。顯示器輸入名稱與數值的對應由呼叫端配對，不推定26必為USB-C。缺少可靠EDID、同型號裝置或交換線材時，仍可能需要人工核對。
 
-| command | 額外欄位 | 行為 |
+`manualSupported` 只表示Windows單一路徑、儲存配置及可重啟Host符合操作條件，不表示DDC/CI可用或面板來源已確認。有效DDC回覆若不符合目前Windows裝置身分會回報錯誤；暫時無法讀取不代表可以猜測來源。Host不建立Input狀態檔或鎖定檔，不自動還原或復用舊備份；`pendingRestore` 固定false，只供格式相容。
+
+輸出控制由呼叫端負責順序與就緒策略。`get_display_ports` 接受可選 `switchMode: pair/active/passive`；Passive 不讀寫 DDC/CI，其餘只讀取當次來源，不等待穩定。`get_display_port_status` 回傳快取。回覆 `controlOwner: client` 表示支援以下獨立操作。`operation` 保留空的 idle 結構供格式相容，不表示測試就緒。
+
+### 獨立本機操作
+
+所有操作必填 `version: 1`、非空 `id`、`command`、`allowInterrupt: true`、`targetKey` 與 `monitorDevicePath`。
+
+| command | 額外欄位 | 本機行為 |
 | --- | --- | --- |
-| `get_display_ports` | 無 | 唯讀刷新顯示端點、EDID 雜湊及目前 DDC/CI 值；操作執行中只回快取 |
-| `get_display_port_status` | 無 | 回傳快取狀態，不重新查詢 DDC/CI；renderer 故障時仍可查 |
-| `switch_display_port` | `targetKey`、`monitorDevicePath`、`expectedInput`、`calibration`、`allowInterrupt: true`、`autoSwitchConfirmed: true`，可選 `verificationMode` | 非同步單一輸出切換、DDC/CI、HDR 與視窗呈現確認 |
+| `set_display_output` | 無 | 儲存及啟用指定單一 Windows 輸出；回報 `changed`，不重啟 renderer、不改測試畫面。 |
+| `write_display_input` | `value`，整數1–255 | 對指定的目前啟用輸出送一次 VCP 0x60 寫入；回報 `accepted`，不切 Windows 配置、不等待來源穩定。 |
+| `enable_display_hdr` | 無 | 啟用目前指定輸出的 Windows HDR，回報 `changed`；不重啟 renderer、不改畫面或視窗。 |
+| `present_display_window` | 無 | 將目前 renderer 帶到前景及置頂，回報幾何遮擋結果 `unobstructed`；不切畫面或更動 HDR。 |
 
-新 bridge 的 `get_host_status` 回覆包含 `host.displayPortControl: true` 能力旗標，Client 可據此識別 Port API。沒有此旗標的舊 Host 不代表支援此功能。
+回覆為 `{"version":1,"id":"...","ok":true,"action":{"command":"...","targetKey":"...","monitorDevicePath":"...",...}}`。只有 set_display_output 可指定未啟用但已連接的輸出；其他操作必須符合目前唯一啟用輸出身分。所有操作驗證 Windows 已儲存配置與實際配置一致。未授權、身分不符、多啟用輸出、欄位錯誤或同時操作會被拒絕。
 
-切到不同端點的配對會排除切換前已確認的舊輸入值，避免 DUT 尚在顯示舊來源時誤把兩筆舊值當新 Port；無法區分兩個來源時會逾時失敗。DDC 模式若切換前目前輸入值無法確認，拒絕變更，應先刷新盤點；不自動改用人工模式。配對原本已啟用的端點則允許相同值。
+Host 保留本機互斥、底層有界逾時與同一請求 id 不重複執行保護；未知結果或失敗不自動重送、不補償、不自動還原輸出。同 id 不可改變內容。這些保護僅涵蓋單次本機指令；呼叫端須阻擋量測期間的操作，並在多步驟間重新核對身分與結果。
 
-Port 操作以服務內的記憶體狀態及執行緒鎖互斥，同一服務不接受重疊的切換要求；不建立跨服務檔案鎖。每次刷新及切換都重新核對目前單一路徑與裝置身分；有效 DDC/CI 回覆若指向其他裝置，兩種模式都拒絕，不依賴上一輪顯示配置。
+### 呼叫端流程責任
 
-DDC 模式的配對要求 `calibration: true`、`expectedInput: null`；等待連續兩次相同有效值，由 Client 請使用者對照 OSD 命名，不自行推定 26 代表 USB-C。正常切換要求 `calibration: false`、`expectedInput` 為已配對的 1–255 整數；連續兩次符合目標才完成。`targetKey` 的 adapter LUID 可能於重開機後改變，不能當永久儲存鍵；以重新盤點的 `monitorDevicePath`、`edidHash` 核對配對。無法取得 EDID 雜湊時須人工重新核對裝置身分。接線交換不一定能由身分欄位提前偵測，使用者更換接線後應重新配對；來源不符時停止。
+- 配對：呼叫端指定起始畫面、選擇 Windows 輸出、必要重啟、輪詢來源及命名。Host 不追加畫面指令。
+- Active：呼叫端先寫 DDC/CI，再選輸出，依 `changed` 決定是否重啟，輪詢 Windows 配置與 DDC/CI 來源，要求連續穩定至少10秒。
+- Passive：呼叫端選輸出、必要重啟後管理1–60秒倒數；不得宣稱實際來源已經自動確認。
+- 測試前：呼叫端啟用 HDR，依 `changed` 決定是否重啟，再明確設定全螢幕及說明文字、要求視窗置頂／遮擋檢查，全部符合後才開始量測。不保存或還原先前測試畫面。
+- Restart：Host 只處理程序；呼叫端決定後續視窗處理。
 
-正常回覆為 `{"version":1,"id":"...","ok":true,"displayPorts":{...}}`。`displayPorts` 包含 `supported`、`manualSupported`、`targets`、`activeTargetKey`、`input`、`pendingRestore`、`operation`。端點項目為 `targetKey`、`monitorDevicePath`、`name`、`connection`、`active`、`available`、`edidHash`；DisplayPort 輸出可能接到 DUT 的 DP 或 USB-C，名稱仍須配對。`pendingRestore` 固定為 false，僅保留舊格式相容，新 Client 不依賴此欄位；不再提供 `restore_display_ports`。`input` 保留原始讀值及解析格式；只辨識單 byte 或相同 byte 重複格式，其他混合值不截低位元組當成功。
-
-`operation` 包含 `operationId`、`kind`、`phase`（`idle`、`running`、`ready`、`failed`）、`error`、`ready`、`targetKey`、`inputValue`、`hdr`、`calibration`、`verificationMode`、`inputVerified`，完成時另有新 renderer `state` 與 `window`。切換先回 `running`，Client 使用 `get_display_port_status` 輪詢。請求逾時後先查狀態，不重送 mutation；同一服務執行期間，相同 id 不會重複套用，不能改用同一 id 送不同內容。操作狀態、請求 id 及診斷只保存在記憶體。服務重啟後以未確認的 idle 狀態開始，不保留歷史操作或自動重跑；按 Refresh inputs 重新盤點，核對通過後可再操作，不會要求先還原。
-
-配對及一般切換皆要求原狀態為 `StartOfTest` 或 `ColorPatchesFull`；Client 可先透過既有 `set_state` 切回 `StartOfTest`，確認成功後再送出配對要求。Client 在量測期間必須阻擋配對及切換，不得於量測中呼叫。API 為維持相容性保留 `calibration` 欄位名稱。切斷其他路徑並儲存指定單一路徑後，先重啟 renderer；若該輸入 HDR 關閉則開啟並再重啟。每次原生查詢以獨立唯讀程序及 3 秒上限隔離，DDC 模式在 45 秒內要求連續兩次相符讀值，樣本間隔 0.5 秒。失敗、逾時、不符或遮擋均停止且不自動還原。配對及切換完成後不再指定藍色或其他驗證圖樣；保留重啟後畫面，僅設定全螢幕、隱藏說明，將受管理 renderer 置頂，並確認呈現及幾何遮擋。切換仍需確認 HDR；這不插入官方量測序列，也不代表量得 HDR 光學性能。
-
-可以直接選擇下一個輸入，不建立或復用跨次操作的原始桌面備份。目前已啟用的端點可直接配對，不呼叫無意義的 SetDisplayConfig，但仍確認新環境與視窗呈現。操作期間 bridge 拒絕 `set_state`、`key`、`restart_host` 及另一個 Port 操作。Input 功能不建立狀態檔、鎖定檔或資料夾；HTTP 狀態不包含完整取樣或原始 CCD 資料。舊版留下的 display-ports.json 與 display-port-session.lock 不會讀取、覆寫或清除。舊版留下的 pending-display-restore.json 保留原地但忽略，不復用，也不阻擋操作。
-
-切換失敗時保留當前輸出並回報具體原因，不自動切回其他 Input。重新讀取核對通過後，可再配對或切換。網路斷線、關閉程式或 Host 重啟均不自動還原；若要回到之前的來源，直接選擇該 Input。移除還原功能需同步更新 Host 與 Client。
-
-`switch_display_port` 的 `verificationMode` 可省略，預設 `ddc`，保留既有呼叫相容；只有明確指定 `manual` 才略過 DDC/CI 來源讀值要求。`manual` 的 `expectedInput` 必須為 null，不論 `calibration` 為 true 或 false。Host 仍核對唯一啟用輸出、實際連接裝置路徑與 Windows 已儲存組態，並完成 HDR、必要重啟、全螢幕、置頂及遮擋檢查，不得略過這些條件。
-
-### Input switching modes
-
-`get_display_ports` 與 `get_display_port_status` 可帶 `switchMode`（`pair`、`active`、`passive`），回覆包含 `switchModes: ["active", "passive"]`。`passive` inventory 不存取 DDC/CI；status 僅讀快取。
-
-`switch_display_port` 新增可選 `switchMode`，省略時為既有的 `pair`；`passiveWaitSeconds` 為 1–60 秒的有限數值，預設 15 秒。既有必填欄位保持不變。
-
-- `pair`：透過 Auto Switch 配對，要求 `autoSwitchConfirmed: true`。`calibration: true` 搭配 `verificationMode: ddc` 讀取切換後來源；明確指定 `switchMode: pair` 與 `verificationMode: manual` 時完全不讀寫 DDC/CI，由呼叫端確認來源。
-- `active`：要求 `calibration: false`、`verificationMode: ddc` 及已配對的數值 `expectedInput`。經目前啟用輸出確認身分後，只送一次 VCP 0x60 寫入，再套用 Windows 單一輸出。無自動重送或 Passive fallback。必要 Port 重啟後，Windows 輸出配置與 DDC/CI 來源須連續穩定至少 10 秒，失敗樣本會重置計時。成功時 `stableSeconds >= 10`、`inputVerified: true`。建議關閉 Auto Switch；布林 `autoSwitchConfirmed` 僅代表使用者確認設定，不是硬體查詢結果。
-- `passive`：要求 `verificationMode: manual`、`expectedInput: null`、`autoSwitchConfirmed: true`，完全不讀寫 DDC/CI。Windows 輸出配置套用及必要 Port 重啟後才開始指定等待時間；成功回報 `timedReady: true`、`waitSeconds`、`inputVerified: false`、null 輸入值。等待完成不代表已自動驗證 DUT 實際來源。
-
-計時期間 `waitRemainingSeconds` 回報剩餘時間。來源或顯示就緒不穩定會重置間隔，總等待上限為指定間隔加 45 秒。失敗時保持目前輸出，不自動還原；執行期間的 inventory 不會變更正在使用的模式。Passive 工作階段包含背景刷新均應使用 Passive inventory。
-
-Active 必須選擇不同於目前啟用的輸出，不能在同一來源寫回相同值作為切換驗證。明確指定 Active／Passive 且 `allowInterrupt: true` 的一般切換可從目前人工操作畫面執行，不保存切換前的畫面或設定；Port 變更後必要重啟，停留在程式預設啟動畫面，不再額外送出測試畫面或設定指令，不啟用或檢查 HDR，也不置頂、檢查遮擋或強制全螢幕／隱藏說明；不指定藍色圖樣。呼叫端仍須阻擋量測及自動化執行期間的切換。配對維持起始畫面與既有畫面限制，但明確指定 `switchMode: pair` 時同樣不進行 HDR／置頂遮擋檢查。省略 `switchMode` 的舊呼叫保持相容行為。
-
-一般 Input 切換不再讀取設定 catalog 以保存或恢復原畫面；測試前 `prepare_display_test` 的設定處理仍維持既有行為。
-
-`manualSupported` 只代表目前硬體路徑與受管理 Host 可進行人工確認操作，不代表 DDC/CI 可讀或來源已確認。一般 DDC/CI 無回覆／未知讀值時可為 true；已知多重螢幕、裝置身分不符、Windows 組態不一致或未受管理啟動時為 false。原生讀取用 `identityMismatch: true` 區分已知身分／多重螢幕錯誤與一般通訊失敗，這種錯誤不能改用人工模式略過。
-
-省略 `switchMode` 的既有人工模式只做一次有界原生讀取以拒絕明確身分不符，不等待來源值穩定。Host 完成時 `phase=ready`、`ready=true` 只表示路徑、HDR 及視窗已就緒，另回 `verificationMode=manual`、`inputVerified=false`、`inputValue=null`；即使原生查詢偶然讀到數值也不自動升級為 DDC 驗證。這類既有呼叫仍須等使用者確認實際畫面與 OSD 後才視為完成；明確指定 Passive 的新呼叫則依上述計時完成判斷。DDC 模式成功才回 `inputVerified=true`。
-
-DDC 模式切換後等待來源逾時，若最後仍無有效讀值且沒有明確身分錯誤，`operation.inputUnavailable` 為 true；有效但不符的來源值不會設為 true。控制端可重新盤點，確認 `manualSupported` 後詢問使用者是否改用人工方式，不可自動重送。失敗時輸出可能已改變，取消人工方式不會還原。
-
-### 開始測試前準備
-
-在開始正式測試前，明確呼叫 `prepare_display_test`：
-
-```json
-{"version":1,"id":"prepare-1","command":"prepare_display_test","allowInterrupt":true}
-```
-
-此同步 API 與輸出切換互斥；核對唯一啟用輸出及 Windows 儲存配置，啟用 HDR（變更時重啟 renderer），保留原圖樣及合法設定，再設定全螢幕／隱藏說明、置頂並確認無遮擋。成功回覆 `preparation: {ready: true, hdr: true, window: {unobstructed: true, ...}, state: ...}`；失敗不可開始測試。準備不改寫輸出切換的 operation id 或既有來源驗證證據。純切換的 `operation.ready` 只表示輸出來源／等待已完成，不代表 HDR 或視窗準備已完成；須先完成此 API 才開始測試。
+整套工作流程 API `switch_display_port` 與 `prepare_display_test` 已移除，舊呼叫會被拒絕，需同步更新呼叫端。Windows HDR 啟用與 renderer 啟動的本機確認仍有底層逾時，與來源穩定／測試等待策略不同。官方測試圖樣、時序及量測規則不變。

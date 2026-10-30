@@ -5,27 +5,20 @@ import io
 import json
 from pathlib import Path
 import socket
+import subprocess
 import time
 import threading
 
 from displayhdr_api import DisplayHDRClient
 from displayhdr_supervisor import Supervisor
 from displayhdr_ports import COMMANDS as PORT_COMMANDS, DisplayPortService, Renderer
-from displayhdr_window_presentation import WindowPresentation
 
+
+MUTATION_COMMANDS = {"set_state", "key"} | (PORT_COMMANDS - {"get_display_ports", "get_display_port_status"})
 
 def failure(identifier, code, message, uncertain=False):
     return {"version": 1, "id": identifier, "ok": False,
             "error": {"code": code, "message": message, "requestMayHaveApplied": uncertain}}
-
-
-def present_restarted_renderer(pid):
-    try:
-        window = WindowPresentation().bring_front(pid, keep_on_top=True)
-    except (OSError, RuntimeError) as error:
-        raise RuntimeError("DisplayHDR window check failed after restart: " + str(error)) from error
-    if not window.get("unobstructed"):
-        raise RuntimeError("DisplayHDR window is obscured or window status could not be verified after restart.")
 
 
 class DeadlineReader(io.RawIOBase):
@@ -129,18 +122,11 @@ class Handler(BaseHTTPRequestHandler):
                 if self.server.display_ports is None:
                     self.server.display_ports = DisplayPortService(Renderer(self.server))
                 ports = self.server.display_ports.dispatch(request)
-                self.reply(200, {"version": 1, "id": identifier, "ok": True, "displayPorts": ports})
+                self.reply(200, {"version": 1, "id": identifier, "ok": True,
+                    ("displayPorts" if command in ("get_display_ports", "get_display_port_status") else "action"): ports})
                 return
-            if command == "prepare_display_test":
-                if (set(request) != {"version", "id", "command", "allowInterrupt"}
-                        or type(request.get("version")) is not int or request["version"] != 1
-                        or not isinstance(identifier, str) or not identifier or request["allowInterrupt"] is not True):
-                    raise ValueError("Test preparation requires version 1, an id and allowInterrupt=true.")
-                if self.server.display_ports is None:
-                    self.server.display_ports = DisplayPortService(Renderer(self.server))
-                preparation = self.server.display_ports.prepare_test()
-                self.reply(200, {"version": 1, "id": identifier, "ok": True, "preparation": preparation})
-                return
+            if command in ("prepare_display_test", "switch_display_port"):
+                raise ValueError("Update the Client; workflow control now belongs to the Client.")
             if (self.server.display_ports is not None and self.server.display_ports.busy()
                     and command in ("set_state", "key", "restart_host")):
                 self.reply(409, failure(identifier, "display_port_busy", "A display-port operation is running; this command was not sent."))
@@ -152,10 +138,11 @@ class Handler(BaseHTTPRequestHandler):
                 if command == "restart_host":
                     if supervisor is None:
                         raise ValueError("Restart requires a managed Host launcher.")
-                    supervisor.restart(presenter=present_restarted_renderer)
+                    supervisor.restart()
                 host = supervisor.status() if supervisor else {"status": "ready", "pid": self.server.pid,
                                                                 "restartSupported": False, "error": ""}
                 host["displayPortControl"] = True
+                host["portPrimitives"] = True
                 self.reply(200, {"version": 1, "id": identifier, "ok": True, "host": host})
                 return
             if self.server.supervisor is not None:
@@ -169,14 +156,15 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(200, response)
         except (ValueError, UnicodeError) as error:
             self.reply(400, failure(identifier, "invalid_request", str(error)))
-        except TimeoutError as error:
+        except (TimeoutError, subprocess.TimeoutExpired) as error:
             self.reply(504, failure(identifier, "bridge_timeout", str(error),
-                                    isinstance(request, dict) and request.get("command") in ("set_state", "key")))
+                                    isinstance(request, dict) and request.get("command") in MUTATION_COMMANDS))
         except RuntimeError as error:
-            self.reply(409, failure(identifier, "display_port_unavailable", str(error)))
+            self.reply(409, failure(identifier, "display_port_unavailable", str(error),
+                                    isinstance(request, dict) and request.get("command") in MUTATION_COMMANDS))
         except (OSError, ConnectionError) as error:
             self.reply(502, failure(identifier, "bridge_unavailable", str(error),
-                                    isinstance(request, dict) and request.get("command") in ("set_state", "key")))
+                                    isinstance(request, dict) and request.get("command") in MUTATION_COMMANDS))
 
     def log_message(self, *_):
         pass

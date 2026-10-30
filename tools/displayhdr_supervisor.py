@@ -102,7 +102,7 @@ class Supervisor:
                     "pid": self.process.pid if self.process else self.attached_pid,
                     "restartSupported": self.attached_pid is None, "error": self.error}
 
-    def start(self, presenter=None):
+    def start(self):
         startup_ready = False
         try:
             if self.attached_pid is None:
@@ -119,8 +119,6 @@ class Supervisor:
                 if process is not None and process.poll() is not None:
                     raise RuntimeError("DisplayHDR exited during startup.")
             startup_ready = True
-            if presenter is not None:
-                presenter(pid)
             with self.lock:
                 self.phase, self.error = "ready", ""
         except Exception as error:
@@ -137,22 +135,22 @@ class Supervisor:
             with self.lock:
                 self.phase, self.error = "failed", str(error)
 
-    def restart(self, presenter=None):
+    def restart(self):
         with self.lock:
             if self.attached_pid is not None:
                 raise ValueError("Restart is unavailable for an attached PID. Use a managed Host launcher.")
             if self.phase in ("starting", "restarting"):
                 raise ValueError("Host is already starting or restarting.")
             self.phase, self.error = "restarting", ""
-        threading.Thread(target=self._restart, args=(presenter,), daemon=True).start()
+        threading.Thread(target=self._restart, daemon=True).start()
 
-    def _restart(self, presenter):
+    def _restart(self):
         try:
             if self.process is not None:
                 self.closer(self.process)
             with self.lock:
                 self.phase = "starting"
-            self.start(presenter)
+            self.start()
         except Exception as error:
             with self.lock:
                 self.phase, self.error = "failed", str(error)

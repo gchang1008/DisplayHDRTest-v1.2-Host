@@ -11,7 +11,7 @@ from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from displayhdr_supervisor import Supervisor
-from displayhdr_server import create_server, present_restarted_renderer
+from displayhdr_server import create_server
 
 
 class Process:
@@ -30,9 +30,6 @@ class SupervisorTests(unittest.TestCase):
         self.gate = None
         self.window = Mock()
         self.window.bring_front.return_value = {"unobstructed": True}
-        window_factory = patch("displayhdr_server.WindowPresentation", return_value=self.window)
-        window_factory.start()
-        self.addCleanup(window_factory.stop)
 
         def launch(exe):
             if self.fail:
@@ -59,36 +56,10 @@ class SupervisorTests(unittest.TestCase):
             time.sleep(.01)
         self.assertEqual(self.supervisor.status()["status"], expected)
 
-    def test_restart_stays_starting_until_presentation_is_confirmed_once(self):
-        entered, release = threading.Event(), threading.Event()
-
-        def present(pid):
-            self.assertEqual(pid, 101)
-            entered.set()
-            release.wait(2)
-
-        self.supervisor.restart(presenter=present)
-        try:
-            self.assertTrue(entered.wait(2))
-            self.assertEqual(self.supervisor.status()["status"], "starting")
-            with self.assertRaises(ValueError):
-                self.supervisor.restart()
-        finally:
-            release.set()
-        self.wait_ready()
-
     def test_restart_without_presentation_callback_does_not_raise_or_pin_window(self):
         self.supervisor.restart()
         self.wait_ready()
         self.window.bring_front.assert_not_called()
-
-    def test_window_check_error_reports_context_and_preserves_started_renderer(self):
-        self.window.bring_front.side_effect = OSError("Window inspection denied")
-        self.supervisor.restart(presenter=present_restarted_renderer)
-        self.wait_ready(expected="failed")
-        self.assertIn("after restart: Window inspection denied", self.supervisor.status()["error"])
-        self.assertIsNone(self.processes[-1].poll())
-        self.assertEqual(self.closed, [self.processes[0]])
 
     def test_restart_closes_only_owned_process_and_changes_pid(self):
         before = self.supervisor.status()
@@ -203,20 +174,20 @@ class SupervisorTests(unittest.TestCase):
             self.gate.set()
             self.wait_ready()
             self.assertEqual(post("get_host_status")[1]["host"]["pid"], 101)
-            self.window.bring_front.assert_called_once_with(101, keep_on_top=True)
+            self.window.bring_front.assert_not_called()
             post("get_host_status")
             post("get_host_status")
-            self.window.bring_front.assert_called_once()
+            self.window.bring_front.assert_not_called()
             self.window.bring_front.return_value = {"unobstructed": False}
             self.assertTrue(post("restart_host")[1]["ok"])
-            self.wait_ready(expected="failed")
-            self.assertIn("obscured", post("get_host_status")[1]["host"]["error"])
+            self.wait_ready()
+            self.window.bring_front.assert_not_called()
             self.assertIsNone(self.processes[-1].poll())
             self.assertEqual(self.closed, self.processes[:-1])
             self.window.bring_front.return_value = {"unobstructed": True}
             self.assertTrue(post("restart_host")[1]["ok"])
             self.wait_ready()
-            self.window.bring_front.assert_called_with(103, keep_on_top=True)
+            self.window.bring_front.assert_not_called()
         finally:
             if self.gate:
                 self.gate.set()

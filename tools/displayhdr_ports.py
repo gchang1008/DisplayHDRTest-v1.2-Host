@@ -2,13 +2,10 @@
 import ctypes as C
 import hashlib
 import json
-import math
 import subprocess
 import threading
-import time
 import winreg
 
-from displayhdr_api import DisplayHDRClient
 from displayhdr_display_paths import (DisplayPaths, Header, TargetName, QDC_ALL_PATHS,
                                       QDC_ONLY_ACTIVE_PATHS, key)
 from displayhdr_hdr_control import HdrControl
@@ -16,7 +13,8 @@ from displayhdr_monitor_input import InputIdentityError, probe_native, write_nat
 from displayhdr_window_presentation import WindowPresentation
 
 
-COMMANDS = {"get_display_ports", "get_display_port_status", "switch_display_port"}
+COMMANDS = {"get_display_ports", "get_display_port_status", "set_display_output",
+            "write_display_input", "enable_display_hdr", "present_display_window"}
 
 
 def edid_hash(device_path):
@@ -36,52 +34,11 @@ class Renderer:
     def __init__(self, server):
         self.server = server
 
-    def request(self, command, **fields):
-        supervisor = self.server.supervisor
-        status = supervisor.status() if supervisor else {"status": "ready", "pid": self.server.pid}
-        if status["status"] != "ready":
-            raise RuntimeError("Host renderer is not ready.")
-        with DisplayHDRClient(status["pid"], timeout=self.server.pipe_timeout) as client:
-            response = client.request(command, **fields)
-        if response.get("ok") is not True or not isinstance(response.get("state"), dict):
-            raise RuntimeError("Host renderer did not confirm the requested state.")
-        return response["state"]
-
-    def state(self):
-        return self.request("get_state")
-
-    def catalog(self):
-        status = self.server.supervisor.status() if self.server.supervisor else {"status": "ready", "pid": self.server.pid}
-        if status["status"] != "ready":
-            raise RuntimeError("Host renderer is not ready.")
-        with DisplayHDRClient(status["pid"], timeout=self.server.pipe_timeout) as client:
-            response = client.request("catalog")
-        if response.get("ok") is not True or not isinstance(response.get("catalog"), dict):
-            raise RuntimeError("Host renderer did not provide its settings catalog.")
-        return response["catalog"]
-
     def restart_supported(self):
         return bool(self.server.supervisor and self.server.supervisor.status().get("restartSupported"))
 
-    def restart(self):
-        if not self.server.supervisor:
-            raise ValueError("Port switching requires a managed Host launcher.")
-        before = self.server.supervisor.status()
-        if not before.get("restartSupported"):
-            raise ValueError("Port switching requires a managed Host launcher.")
-        self.server.supervisor.restart()
-        deadline = time.monotonic() + 30
-        while time.monotonic() < deadline:
-            status = self.server.supervisor.status()
-            if status["status"] == "ready" and status["pid"] != before["pid"]:
-                return {"pidBefore": before["pid"], "pid": status["pid"], "state": self.state()}
-            if status["status"] in ("failed", "stopped"):
-                raise RuntimeError("Host restart failed: " + status.get("error", ""))
-            time.sleep(.1)
-        raise TimeoutError("Host restart timed out.")
-
     def pid(self):
-        return self.server.supervisor.status()["pid"]
+        return self.server.supervisor.status()["pid"] if self.server.supervisor else self.server.pid
 
 
 class DisplayPortService:
@@ -99,6 +56,8 @@ class DisplayPortService:
         self.data = {"supported": False, "manualSupported": False, "targets": [], "activeTargetKey": "", "input": {},
                      "pendingRestore": False, "operation": self.operation()}
         self.seen = set()
+        self.running = False
+        self.replies = {}
 
     @staticmethod
     def operation():
@@ -113,6 +72,7 @@ class DisplayPortService:
             result = json.loads(json.dumps({name: self.data[name] for name in
                 ("supported", "manualSupported", "targets", "activeTargetKey", "input", "pendingRestore")}))
             result["switchModes"] = ["active", "passive"]
+            result["controlOwner"] = "client"
             result["operation"] = {name: value for name, value in self.data["operation"].items()
                 if name in {*self.operation(), "state", "window"}}
             if self.data.get("error"):
@@ -121,7 +81,7 @@ class DisplayPortService:
 
     def busy(self):
         with self.lock:
-            return self.data["operation"]["phase"] == "running"
+            return self.running
 
     def close(self):
         self.closed = True
@@ -187,247 +147,64 @@ class DisplayPortService:
         if self.closed:
             raise ValueError("The display-port service has closed.")
         command = request["command"]
-        if command not in COMMANDS:
-            raise ValueError("Unknown display-port command.")
         common = {"version", "id", "command"}
-        fields = (common | {"targetKey", "monitorDevicePath", "expectedInput", "calibration", "allowInterrupt", "autoSwitchConfirmed"}
-                  if command == "switch_display_port" else common)
-        for optional in (("verificationMode", "switchMode", "passiveWaitSeconds") if command == "switch_display_port" else ("switchMode",) if command in ("get_display_ports", "get_display_port_status") else ()):
-            if optional in request:
-                fields.add(optional)
+        query = command in ("get_display_ports", "get_display_port_status")
+        expected = common | ({"switchMode"} if "switchMode" in request else set()) if query else common | {
+            "allowInterrupt", "targetKey", "monitorDevicePath"}
+        if command == "write_display_input":
+            expected.add("value")
+        if command not in COMMANDS or set(request) != expected or type(request.get("version")) is not int or request["version"] != 1 or not isinstance(request.get("id"), str) or not request["id"]:
+            raise ValueError("Unexpected or missing display operation fields.")
         mode = request.get("switchMode", "pair")
         if mode not in ("pair", "active", "passive"):
-            raise ValueError("Unknown input switch mode.")
-        if set(request) != fields or type(request.get("version")) is not int or request["version"] != 1 or not isinstance(request.get("id"), str) or not request["id"]:
-            raise ValueError("Unexpected or missing display-port command fields.")
-        if command == "get_display_ports":
-            return self.inventory(mode)
-        if command == "get_display_port_status":
-            return self.status()
+            raise ValueError("Unknown inventory mode.")
+        if query:
+            return self.inventory(mode) if command == "get_display_ports" else self.status()
         if request["allowInterrupt"] is not True:
             raise ValueError("Explicit allowInterrupt=true is required.")
-        if command == "switch_display_port":
-            calibration, expected = request["calibration"], request["expectedInput"]
-            verification = request.get("verificationMode", "ddc")
-            wait = request.get("passiveWaitSeconds", 15)
-            if (type(wait) not in (int, float) or not math.isfinite(wait) or not 1 <= wait <= 60
-                    or mode == "active" and (calibration or verification != "ddc")
-                    or mode == "passive" and (verification != "manual" or expected is not None)):
-                raise ValueError("Invalid switch mode or passive waiting time.")
-            if (verification not in ("ddc", "manual") or type(calibration) is not bool or (mode != "active" and request["autoSwitchConfirmed"] is not True)
-                    or type(request["autoSwitchConfirmed"]) is not bool
-                    or not isinstance(request["targetKey"], str) or not request["targetKey"]
-                    or not isinstance(request["monitorDevicePath"], str) or not request["monitorDevicePath"]
-                    or ((calibration or verification == "manual") and expected is not None)
-                    or (not calibration and verification == "ddc" and (type(expected) is not int or not 1 <= expected <= 255))):
-                raise ValueError("Confirm Auto Switch and provide a valid target and calibration/input value.")
+        if not all(isinstance(request[k], str) and request[k] for k in ("targetKey", "monitorDevicePath")):
+            raise ValueError("A display endpoint and device identity are required.")
+        if command == "write_display_input" and (type(request["value"]) is not int or not 1 <= request["value"] <= 255):
+            raise ValueError("Invalid DDC/CI source value.")
         with self.lock:
-            if request["id"] == self.data["operation"]["operationId"]:
-                if self.data["operation"].get("request") != request:
-                    raise ValueError("This operation id belongs to a different request.")
-                return self.status()
-            if request["id"] in self.seen:
-                raise ValueError("This operation id was already used; no command was repeated.")
+            identifier = request["id"]
+            if identifier in self.replies:
+                previous, result = self.replies[identifier]
+                if previous != request:
+                    raise ValueError("Request id belongs to a different operation.")
+                return result
+            if identifier in self.seen:
+                raise ValueError("Request already attempted; no command was repeated.")
             if self.busy():
-                raise ValueError("A display-port operation is already running.")
-            if command == "switch_display_port" and not self.renderer.restart_supported():
-                raise ValueError("Port switching requires a managed Host launcher.")
-            state = self.renderer.state()
-            if mode not in ("active", "passive") and state.get("test", {}).get("id") not in ("StartOfTest", "ColorPatchesFull"):
-                raise ValueError("Port operations require the start screen or full-screen color preview; stop measurement first.")
-            self.seen.add(request["id"])
-            self.data["operation"] = {**self.operation(), "operationId": request["id"], "kind": command,
-                                      "phase": "running", "targetKey": request.get("targetKey", ""),
-                                      "calibration": request.get("calibration", False), "request": request,
-                                      "verificationMode": request.get("verificationMode", "ddc"),
-                                      "switchMode": mode, "waitSeconds": wait if mode == "passive" else 10 if mode == "active" else 0}
-            self.switch_mode = mode
-            self.skip_ddc = mode == "passive" or ("switchMode" in request and mode == "pair" and request.get("verificationMode") == "manual")
+                raise ValueError("A display operation is running.")
+            self.seen.add(identifier)
+            self.running = True
             try:
-                response = self.status()
-                threading.Thread(target=self.work, args=(request,), daemon=True).start()
-            except Exception as error:
-                self.data["operation"].update(phase="failed", ready=False, error=str(error))
-                raise
-            return response
-
-    def wait_input(self, target, identity, expected, excluded=None):
-        deadline, previous, consecutive = time.monotonic() + 45, None, 0
-        samples = []
-        reading = {"ok": False, "error": "No input response was received."}
-        while time.monotonic() < deadline:
-            reading = self.read_input()
-            value = reading.get("currentValue")
-            valid = (reading.get("ok") is True and reading.get("targetKey") == target
-                     and reading.get("monitorDevicePath") == identity and type(value) is int and 1 <= value <= 255
-                     and value != excluded
-                     and (expected is None or value == expected))
-            consecutive = consecutive + 1 if valid and value == previous else 1 if valid else 0
-            previous = value if valid else None
-            samples.append({"at": time.time(), "input": reading, "matches": valid})
-            if consecutive >= 2 and time.monotonic() <= deadline:
-                return reading, samples
-            time.sleep(min(.5, max(0, deadline - time.monotonic())))
-        error = TimeoutError("DUT input could not be confirmed within 45 seconds.")
-        error.input_samples, error.last_input = samples, reading
-        raise error
-
-    def wait_ready(self, controller, target, identity, expected, operation, mode, reading):
-        duration = operation["waitSeconds"]
-        deadline = time.monotonic() + duration + 45
-        stable_since = None
-        while time.monotonic() < deadline:
-            if self.closed:
-                raise RuntimeError("Input service closed while waiting for readiness.")
-            current = controller.inspect()
-            valid = (len(current["active"]["paths"]) == 1 and current.get("matchesDatabase")
-                and current["active"]["paths"][0]["targetKey"] == target
-                and current["active"]["paths"][0].get("monitorDevicePath") == identity)
-            if mode == "active":
-                reading = self.read_input()
-                valid = (valid and reading.get("ok") is True and reading.get("targetKey") == target
-                    and reading.get("monitorDevicePath") == identity
-                    and type(reading.get("currentValue")) is int and reading.get("currentValue") == expected)
-            now = time.monotonic()
-            stable_since = (now if stable_since is None else stable_since) if valid else None
-            remaining = duration if stable_since is None else max(0, duration - (now - stable_since))
-            with self.lock:
-                self.data["operation"]["waitRemainingSeconds"] = round(remaining, 1)
-            if valid and remaining <= 0 and now <= deadline:
-                operation["stableSeconds"] = now - stable_since if mode == "active" else 0
-                return reading
-            time.sleep(min(.5, max(0, deadline - now)))
-        raise TimeoutError("Input did not remain ready throughout the required stability period.")
-
-    def writable_settings(self, settings):
-        schema = self.renderer.catalog().get("settingSchema")
-        if not isinstance(schema, dict):
-            raise RuntimeError("Host setting ranges are unavailable; settings cannot be restored.")
-        result = {}
-        for name, value in settings.items():
-            field = schema.get(name, {})
-            if type(value) in (int, float) and (not math.isfinite(value)
-                    or value < field.get("minimum", -math.inf) or value > field.get("maximum", math.inf)):
-                continue
-            result[name] = value
-        return result
-
-    def prepare_test(self):
-        with self.lock:
-            if self.closed or self.busy():
-                raise ValueError("A display-port operation is running or the service is closed.")
-            controller = self.controller_factory()
-            current = controller.inspect()
-            if len(current["active"]["paths"]) != 1 or not current.get("matchesDatabase"):
-                raise ValueError("Verify exactly one active display and its saved configuration before testing.")
-            active = current["active"]["paths"][0]
-            original = self.renderer.state()
-            settings = self.writable_settings(original["settings"])
-            hdr = self.hdr_factory().enable(active["targetKey"], active["monitorDevicePath"])
-            if hdr.get("changed"):
-                self.renderer.restart()
-            settings = self.writable_settings(settings)
-            state = self.renderer.request("set_state", test=original["test"]["id"],
-                settings={**settings, "fullscreen": True, "textVisible": False})
-            if state.get("display", {}).get("hdr") is not True:
-                raise RuntimeError("HDR mode was not confirmed before testing.")
-            if not all(state.get("presentation", {}).get(k) is True for k in ("presented", "resourcesValid")):
-                raise RuntimeError("Host window presentation was not confirmed before testing.")
-            window = self.window_factory().bring_front(self.renderer.pid(), keep_on_top=True)
-            if window.get("unobstructed") is not True:
-                raise RuntimeError("Host window is obscured or window status could not be verified before testing.")
-            return {"ready": True, "hdr": True, "window": window, "state": state}
-
-    def work(self, request):
-        operation = dict(self.data["operation"])
-        manual = request.get("verificationMode", "ddc") == "manual"
-        mode = request.get("switchMode", "pair")
-        try:
-            controller = self.controller_factory()
-            target, identity = request["targetKey"], request["monitorDevicePath"]
-            current = controller.inspect()
-            if len(current["active"]["paths"]) != 1 or not current.get("matchesDatabase"):
-                raise ValueError("Verify exactly one active display and its saved configuration before switching.")
-            original_input = self.read_input()
-            active = current["active"]["paths"][0]
-            if original_input.get("identityMismatch") is True:
-                raise ValueError(original_input.get("error") or "Native display identity could not be verified.")
-            if (original_input.get("ok") is True and
-                    (original_input.get("targetKey") != active["targetKey"]
-                     or original_input.get("monitorDevicePath") != active.get("monitorDevicePath"))):
-                raise ValueError("DDC/CI display identity does not match the active output.")
-            if not manual and (not original_input.get("ok") or type(original_input.get("currentValue")) is not int
-                    or not 1 <= original_input["currentValue"] <= 255
-                    or original_input.get("targetKey") != active["targetKey"]
-                    or original_input.get("monitorDevicePath") != active.get("monitorDevicePath")):
-                raise ValueError("DUT DDC/CI input is unavailable; no port switch was applied.")
-
-            selected = next((path for path in controller.api.query(QDC_ALL_PATHS).paths
-                             if path.target.available and key(path.target) == target), None)
-            if selected is None or controller.api.device_path(selected) != identity:
-                raise ValueError("Requested display identity does not match the connected output.")
-            if active["targetKey"] == target and active.get("monitorDevicePath") != identity:
-                raise ValueError("Active target identity does not match the requested path.")
-            if mode == "active" and active["targetKey"] == target:
-                raise ValueError("Active switching requires a different input for write verification.")
-            pure = "switchMode" in request
-            if not pure or request["calibration"]:
-                self.renderer.request("set_state", test="StartOfTest", settings={} if pure else {"fullscreen": True})
-            if mode == "active":
-                operation["write"] = self.input_writer(active["targetKey"], active["monitorDevicePath"], request["expectedInput"])
-            if active["targetKey"] != target:
-                operation["selection"] = controller.trial(target, identity, None, save_to_database=True)
-                operation["portRestart"] = self.renderer.restart()
-            if not pure:
-                hdr = self.hdr_factory().enable(target, identity)
-                if hdr.get("changed"):
-                    operation["hdrRestart"] = self.renderer.restart()
-                elif active["targetKey"] == target:
-                    operation["freshRestart"] = self.renderer.restart()
-            if manual:
-                reading = {"ok": False, "currentValue": None,
-                           "error": "Passive waiting does not verify the DUT input source." if mode == "passive"
-                           else "Input source requires manual confirmation."}
-            else:
-                excluded = original_input["currentValue"] if request["calibration"] and active["targetKey"] != target else None
-                reading, samples = self.wait_input(target, identity, request["expectedInput"], excluded=excluded)
-                operation["inputSamples"] = samples
-            current = controller.inspect()
-            if (len(current["active"]["paths"]) != 1 or current["active"]["paths"][0]["targetKey"] != target
-                    or current["active"]["paths"][0].get("monitorDevicePath") != identity or not current.get("matchesDatabase")):
-                raise RuntimeError("The selected display configuration changed.")
-            active_target = target
-            state = (self.renderer.state() if pure else
-                     self.renderer.request("set_state", settings={"fullscreen": True, "textVisible": False}))
-            if not pure and not state.get("display", {}).get("hdr"):
-                raise RuntimeError("HDR mode was not confirmed after the port switch.")
-            if not all(state.get("presentation", {}).get(k) is True for k in ("presented", "resourcesValid")):
-                raise RuntimeError("Host window presentation was not confirmed.")
-            window = {}
-            if not pure:
-                window = self.window_factory().bring_front(self.renderer.pid(), keep_on_top=True)
-                if not window.get("unobstructed"):
-                    raise RuntimeError("Host window is obscured or window status could not be verified.")
-            if mode in ("active", "passive"):
-                reading = self.wait_ready(controller, target, identity, request["expectedInput"], operation, mode, reading)
-            with self.lock:
-                self.data.update(input=reading, activeTargetKey=active_target, operation=operation,
-                                 supported=not manual, manualSupported=True, error="")
-                operation.update(phase="ready", ready=True, error="", inputValue=reading.get("currentValue"),
-                                 hdr=bool(state["display"]["hdr"]), state=state, window=window, inputVerified=not manual,
-                                 timedReady=mode == "passive", waitRemainingSeconds=0)
-                for item in self.data["targets"]:
-                    item["active"] = item["targetKey"] == self.data["activeTargetKey"]
-        except Exception as error:
-            with self.lock:
-                if getattr(error, "report", None):
-                    operation["selection"] = error.report
-                if getattr(error, "input_samples", None):
-                    operation["inputSamples"] = error.input_samples
-                    self.data["input"] = error.last_input
-                    reading = error.last_input
-                    value = reading.get("currentValue")
-                    operation["inputUnavailable"] = (reading.get("identityMismatch") is not True and
-                        (reading.get("ok") is not True or type(value) is not int or not 1 <= value <= 255))
-                self.data["operation"] = operation
-                self.data["operation"].update(phase="failed", ready=False, error=str(error))
+                controller = self.controller_factory()
+                current = controller.inspect()
+                active = current["active"]["paths"]
+                if len(active) != 1 or not current.get("matchesDatabase"):
+                    raise ValueError("Exactly one active output and matching Windows configuration are required.")
+                target, identity = request["targetKey"], request["monitorDevicePath"]
+                selected = next((p for p in controller.api.query(QDC_ALL_PATHS).paths
+                                 if p.target.available and key(p.target) == target), None)
+                if selected is None or controller.api.device_path(selected) != identity:
+                    raise ValueError("Requested display identity does not match the connected output.")
+                if command != "set_display_output" and (active[0]["targetKey"] != target or active[0].get("monitorDevicePath") != identity):
+                    raise ValueError("Operation requires the requested active display identity.")
+                if command == "set_display_output":
+                    changed = active[0]["targetKey"] != target
+                    result = {"changed": changed}
+                    if changed:
+                        result["selection"] = controller.trial(target, identity, None, save_to_database=True)
+                elif command == "write_display_input":
+                    result = self.input_writer(target, identity, request["value"])
+                elif command == "enable_display_hdr":
+                    result = self.hdr_factory().enable(target, identity)
+                else:
+                    result = self.window_factory().bring_front(self.renderer.pid(), keep_on_top=True)
+                result = {"command": command, "targetKey": target, "monitorDevicePath": identity, **result}
+                self.replies[identifier] = (dict(request), result)
+                return result
+            finally:
+                self.running = False
