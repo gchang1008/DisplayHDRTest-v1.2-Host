@@ -42,6 +42,60 @@ def override_edid(extensions=2, base_extensions=1):
 
 
 class EdidReaderTests(unittest.TestCase):
+    def test_read_trace_includes_blocks_normal_stop_cache_skip_and_total_time(self):
+        data = raw_edid(2)
+        output = output_for(data) + b'\n' + json.dumps(
+            {'end': 3, 'elapsedMs': 1.25, 'reason': 'No more EDID blocks.'}).encode()
+        with patch.object(edid.subprocess, 'run', return_value=SimpleNamespace(stdout=output, returncode=0)):
+            result = edid.read_edid(IDENTITY)
+        trace = result['readTrace']
+        self.assertEqual([event['result'] for event in trace], ['read', 'read', 'read', 'end', 'skipped'])
+        self.assertEqual([event['block'] for event in trace[:4]], [0, 1, 2, 3])
+        self.assertEqual(trace[3]['reason'], 'No more EDID blocks.')
+        self.assertEqual(trace[3]['elapsedMs'], 1.25)
+        self.assertEqual(trace[-1]['stage'], 'registry')
+        self.assertGreaterEqual(result['readElapsedMs'], 0)
+        self.assertEqual(result['warnings'], [])
+        self.assertNotIn('dataBase64', json.dumps(trace))
+        self.assertNotIn('data', {key for event in trace for key in event})
+
+    def test_timeout_trace_retains_successful_blocks_and_stop_reason(self):
+        data = raw_edid(2)[:256]
+        timeout = subprocess.TimeoutExpired('powershell', 8, output=output_for(data))
+        trace = []
+        with patch.object(edid.subprocess, 'run', side_effect=timeout):
+            actual, warnings = edid.wmi_edid(IDENTITY, trace)
+        self.assertEqual(actual, data)
+        self.assertEqual([event['result'] for event in trace], ['read', 'read', 'timeout'])
+        self.assertEqual(trace[-1]['block'], 2)
+        self.assertIn('8 seconds', trace[-1]['reason'])
+        self.assertGreaterEqual(trace[-1]['elapsedMs'], 0)
+        self.assertTrue(warnings)
+
+    def test_registry_trace_records_use_rejection_and_failure(self):
+        data = raw_edid(2)
+        different = bytearray(data)
+        different[130] = 1
+        for cached, outcome in ((data, 'used'), (bytes(different), 'skipped'), (OSError('cache failed'), 'error')):
+            with self.subTest(outcome=outcome), \
+                    patch.object(edid, 'wmi_edid', return_value=(data[:256], [])), \
+                    patch.object(edid, 'registry_edid', **({'side_effect': cached} if isinstance(cached, Exception)
+                                                        else {'return_value': cached})):
+                result = edid.read_edid(IDENTITY)
+            event = result['readTrace'][-1]
+            self.assertEqual(event['stage'], 'registry')
+            self.assertEqual(event['result'], outcome)
+            self.assertTrue(event['reason'])
+            self.assertGreaterEqual(event['elapsedMs'], 0)
+
+    def test_wmi_start_failure_is_recorded_before_registry_fallback(self):
+        with patch.object(edid, 'wmi_edid', side_effect=OSError('worker unavailable')), \
+                patch.object(edid, 'registry_edid', side_effect=OSError('cache unavailable')):
+            result = edid.read_edid(IDENTITY)
+        self.assertEqual([(event['stage'], event['result']) for event in result['readTrace']],
+                         [('wmi', 'error'), ('registry', 'error')])
+        self.assertIn('worker unavailable', result['readTrace'][0]['reason'])
+
     def test_extra_blocks_are_preserved_and_not_replaced_by_registry(self):
         data = raw_edid(0) + bytes(256)
         with patch.object(edid, 'wmi_edid', return_value=(data, [])), \
@@ -223,7 +277,7 @@ class EdidReaderTests(unittest.TestCase):
 
 
 class EdidWmiScriptTests(unittest.TestCase):
-    def run_script(self, statuses, blocks=None, block_types=None, repeat=False):
+    def run_script(self, statuses, blocks=None, block_types=None, repeat=False, trace=None):
         blocks = blocks if blocks is not None else [raw_edid(2)[i:i + 128] for i in range(0, 384, 128)]
         encoded = base64.b64encode(json.dumps([base64.b64encode(block).decode('ascii')
                                                for block in blocks]).encode()).decode('ascii')
@@ -246,7 +300,27 @@ function Invoke-CimMethod {
             'TYPES', ', '.join(str(value) for value in (block_types or [255] * len(blocks)))).replace(
             'REPEAT', '$true' if repeat else '$false')
         with patch.object(edid, 'WMI_SCRIPT', mock_script + edid.WMI_SCRIPT):
-            return edid.wmi_edid(IDENTITY)
+            return edid.wmi_edid(IDENTITY, trace)
+
+    def test_script_trace_preserves_per_block_times_and_normal_exception_end(self):
+        trace = []
+        data, warnings = self.run_script(['$true'] * 3, trace=trace)
+        self.assertEqual(data, raw_edid(2))
+        self.assertEqual(warnings, [])
+        self.assertEqual([event['result'] for event in trace], ['read', 'read', 'read', 'end'])
+        self.assertTrue(all(event['elapsedMs'] >= 0 for event in trace))
+        self.assertTrue(all(event['blockType'] == 255 and event['byteLength'] == 128 for event in trace[:3]))
+        self.assertEqual(trace[-1]['block'], 3)
+        self.assertIn('No more EDID blocks', trace[-1]['reason'])
+
+    def test_script_trace_keeps_status_end_without_creating_warning(self):
+        trace = []
+        data, warnings = self.run_script(['$true', '$true'], [raw_edid(0), bytes(128)], [1, 0], trace=trace)
+        self.assertEqual(data, raw_edid(0))
+        self.assertEqual(warnings, [])
+        self.assertEqual(trace[-1]['result'], 'end')
+        self.assertEqual(trace[-1]['blockType'], 0)
+        self.assertIn('block type 0', trace[-1]['reason'])
 
     def test_all_available_blocks_are_read_even_if_declared_count_is_too_small(self):
         for declared in (0, 1):
@@ -268,18 +342,28 @@ function Invoke-CimMethod {
 
     def test_invalid_type_or_length_after_declared_end_is_still_a_warning(self):
         blocks = [raw_edid(0), bytes(128)]
-        data, warnings = self.run_script(['$true'] * 2, blocks, [1, 99])
+        trace = []
+        data, warnings = self.run_script(['$true'] * 2, blocks, [1, 99], trace=trace)
         self.assertEqual(data, blocks[0])
         self.assertIn('invalid WMI block type', warnings[0])
-        data, warnings = self.run_script(['$true'] * 2, [blocks[0], bytes(64)])
+        self.assertEqual(trace[-1]['blockType'], 99)
+        self.assertEqual(trace[-1]['result'], 'error')
+        trace = []
+        data, warnings = self.run_script(['$true'] * 2, [blocks[0], bytes(64)], trace=trace)
         self.assertEqual(data, blocks[0])
         self.assertIn('did not contain 128 bytes', warnings[0])
+        self.assertEqual(trace[-1]['byteLength'], 64)
 
     def test_256_block_limit_retains_repeated_blocks_and_warns(self):
-        data, warnings = self.run_script(['$true'], [raw_edid(0)], repeat=True)
+        trace = []
+        data, warnings = self.run_script(['$true'], [raw_edid(0)], repeat=True, trace=trace)
         self.assertEqual(data, raw_edid(0) * 256)
         self.assertEqual(len(data), 32768)
         self.assertIn('256-block limit', warnings[0])
+        self.assertEqual(len(trace), 257)
+        self.assertEqual(trace[-1]['block'], 256)
+        self.assertEqual(trace[-1]['result'], 'limit')
+        self.assertIn('256-block limit', trace[-1]['reason'])
 
     def test_failure_status_after_declared_end_is_normal_availability_end(self):
         data, warnings = self.run_script(['$true', '$false'], [raw_edid(0), bytes(128)])

@@ -173,6 +173,8 @@ WMI 方法的回傳值依實際型別處理：布林 `True` 成功、`False` 失
 
 缺少區塊、checksum 錯誤或無法讀取均回覆 `ok:true`，保留實際原始內容並列出原因，由呼叫端顯示警告及決定測試策略。身分不符、讀取期間輸出改變、欄位錯誤或本機操作忙碌仍拒絕。資料保存與跨 Input 排程由 Client 負責。
 
+診斷欄位 `readElapsedMs` 是本次讀取含備援與檢查的總耗時（毫秒）；`readTrace` 是最多 260 筆、不含原始 EDID 內容的事件。每筆包含 `stage`（`wmi`／`registry`）、`result`（`read`／`end`／`error`／`timeout`／`limit`／`used`／`skipped`）及非負的 `elapsedMs`，依事件另含 `block`（0–256）、`byteLength`、`blockType`、`reason`（最多1024字元）。WMI 成功區塊的耗時由各次 CIM 呼叫計時；逾時／異常退出事件的耗時是整個 worker 經過時間。即使長度已符合宣告且沒有警告，也保留下一區塊的停止位置與原因；登錄備援是否使用、跳過或失敗亦記錄。診斷由 Client 與請求 id 關聯後保存；舊版 Host 未含這兩個欄位時，Client 可維持原有讀取功能。
+
 原廠依據：[WmiGetMonitorRawEEdidV1Block](https://learn.microsoft.com/en-us/windows/win32/wmicoreprov/wmigetmonitorraweedidv1block-wmimonitordescriptormethods)、[Windows EDID 格式與 override](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/overriding-monitor-edids)。
 
 ### Other 顯示控制
