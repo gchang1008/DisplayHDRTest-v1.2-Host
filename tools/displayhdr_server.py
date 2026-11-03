@@ -159,11 +159,17 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, UnicodeError) as error:
             self.reply(400, failure(identifier, "invalid_request", str(error)))
         except (TimeoutError, subprocess.TimeoutExpired) as error:
-            self.reply(504, failure(identifier, "bridge_timeout", str(error),
-                                    isinstance(request, dict) and request.get("command") in MUTATION_COMMANDS))
+            result = failure(identifier, "bridge_timeout", str(error),
+                             isinstance(request, dict) and request.get("command") in MUTATION_COMMANDS)
+            if hasattr(error, 'controlTrace'):
+                result['error'].update(controlTrace=error.controlTrace, controlElapsedMs=error.controlElapsedMs)
+            self.reply(504, result)
         except RuntimeError as error:
-            self.reply(409, failure(identifier, "display_port_unavailable", str(error),
-                                    isinstance(request, dict) and request.get("command") in MUTATION_COMMANDS))
+            result = failure(identifier, "display_port_unavailable", str(error),
+                             isinstance(request, dict) and request.get("command") in MUTATION_COMMANDS)
+            if hasattr(error, 'controlTrace'):
+                result['error'].update(controlTrace=error.controlTrace, controlElapsedMs=error.controlElapsedMs)
+            self.reply(409, result)
         except (OSError, ConnectionError) as error:
             self.reply(502, failure(identifier, "bridge_unavailable", str(error),
                                     isinstance(request, dict) and request.get("command") in MUTATION_COMMANDS))

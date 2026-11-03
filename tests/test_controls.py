@@ -37,6 +37,18 @@ class Color:
 
 
 class ControlsTests(unittest.TestCase):
+    def test_control_trace_times_endpoint_hdr_and_windows_and_survives_read_error(self):
+        self.internal()
+        result = self.native.run(self.request)
+        self.assertTrue({'endpoint', 'hdr', 'windows-brightness'} <= {row['stage'] for row in result['controlTrace']})
+        self.assertTrue(all(row['elapsedMs'] >= 0 for row in result['controlTrace']))
+        self.assertGreaterEqual(result['controlElapsedMs'], 0)
+        self.assertEqual(result['brightness']['ddcMethod'], 'windows')
+        self.windows.side_effect = RuntimeError('WMI unavailable')
+        result = self.native.run(self.request)
+        self.assertTrue(any(row['stage'] == 'windows-brightness' and row['result'] == 'error'
+                            and row['reason'] == 'WMI unavailable' for row in result['controlTrace']))
+
     def setUp(self):
         self.controller = Controller()
         self.controller.api.dll.DisplayConfigGetDeviceInfo = self.name
@@ -124,6 +136,7 @@ class ControlsTests(unittest.TestCase):
             self.native.run({'command': 'set_display_hdr', **self.target, 'enabled': True})
         self.assertEqual(self.color.writes, [True])
         self.assertGreaterEqual(self.clock, 5)
+        self.assertLessEqual(len(self.native.trace), 63)
 
     def test_query_brightness_failure_is_unavailable_but_mutation_failure_is_error(self):
         self.native_ddc.transfer.side_effect = OSError('DDC unavailable')
@@ -184,6 +197,37 @@ class ControlsTests(unittest.TestCase):
 
 
 class DdcTests(unittest.TestCase):
+    def test_confirmed_vcp_route_skips_slow_capability_but_reads_and_confirms_again(self):
+        ddc, api, values = self.make_vcp()
+        clock = [0]
+        original = api.GetMonitorCapabilities.side_effect
+        def slow_caps(*args):
+            clock[0] += 3
+            return original(*args)
+        api.GetMonitorCapabilities.side_effect = slow_caps
+        with patch.object(controls.time, 'perf_counter', side_effect=lambda: clock[0]):
+            first = ddc.transfer(r'\\.\DISPLAY1')
+            second = ddc.transfer(r'\\.\DISPLAY1', 75, prefer_vcp=True)
+        self.assertEqual(first['ddcMethod'], 'vcp')
+        self.assertEqual(second['percent'], 75)
+        api.GetMonitorCapabilities.assert_called_once()
+        self.assertEqual(api.GetVCPFeatureAndVCPFeatureReply.call_count, 3)
+        api.SetVCPFeature.assert_called_once()
+        self.assertEqual([row['elapsedMs'] for row in ddc.trace if row['stage'] == 'capability'], [3000, 0])
+        self.assertEqual(ddc.trace[-1]['stage'], 'confirm')
+
+    def test_hint_read_failure_does_not_try_high_level_or_write(self):
+        ddc, api, values = self.make_vcp()
+        api.GetVCPFeatureAndVCPFeatureReply.return_value = 0
+        api.GetVCPFeatureAndVCPFeatureReply.side_effect = None
+        with self.assertRaises(OSError):
+            ddc.transfer(r'\\.\DISPLAY1', 60, prefer_vcp=True)
+        api.GetMonitorCapabilities.assert_not_called()
+        api.GetMonitorBrightness.assert_not_called()
+        api.SetVCPFeature.assert_not_called()
+        api.SetMonitorBrightness.assert_not_called()
+        self.assertEqual(ddc.trace[-1]['result'], 'error')
+
     def make_vcp(self, confirm=True, error=0xc0262587):
         ddc, api = self.make()
         def caps(*args):
@@ -355,6 +399,88 @@ class HdrPacketTests(unittest.TestCase):
 
 
 class ServiceTests(unittest.TestCase):
+    def vcp_result(self, target='target', path='path'):
+        return {'target': {'targetKey': target, 'monitorDevicePath': path, 'internal': False},
+                'hdr': {'enabled': False}, 'brightness': {'writable': True, 'ddcMethod': 'vcp'}}
+
+    def brightness_request(self, identifier='write', target='target', path='path'):
+        return {'version': 1, 'id': identifier, 'command': 'set_display_brightness', 'targetKey': target,
+                'monitorDevicePath': path, 'allowInterrupt': True, 'percent': 60}
+
+    def test_vcp_hint_is_host_private_identity_scoped_and_refresh_reprobes(self):
+        snapshot = self.vcp_result()
+        self.runner.return_value = snapshot
+        self.service.dispatch(self.request)
+        self.runner.return_value = {'displayControls': snapshot}
+        request = self.brightness_request()
+        self.service.dispatch(request)
+        self.assertTrue(self.runner.call_args.args[0]['_brightnessVcp'])
+        self.assertNotIn('_brightnessVcp', request)
+        self.service.dispatch(request)
+        self.assertEqual(self.runner.call_count, 2)
+        self.service.dispatch(self.brightness_request('other', path='new-path'))
+        self.assertNotIn('_brightnessVcp', self.runner.call_args.args[0])
+        self.runner.return_value = snapshot
+        self.service.dispatch({**self.request, 'id': 'refresh'})
+        self.assertNotIn('_brightnessVcp', self.runner.call_args.args[0])
+        with self.assertRaises(ValueError):
+            self.service.dispatch({**self.brightness_request('private'), '_brightnessVcp': True})
+
+    def test_failed_write_and_hdr_clear_vcp_hint_without_replay(self):
+        snapshot = self.vcp_result()
+        self.runner.return_value = snapshot
+        self.service.dispatch(self.request)
+        self.runner.side_effect = RuntimeError('write unconfirmed')
+        with self.assertRaises(RuntimeError):
+            self.service.dispatch(self.brightness_request())
+        self.assertIsNone(self.service.brightness_vcp_target)
+        self.assertEqual(self.runner.call_count, 2)
+        self.runner.side_effect = None
+        self.runner.return_value = snapshot
+        self.service.dispatch({**self.request, 'id': 'refresh'})
+        self.runner.return_value = {'displayControls': snapshot}
+        self.service.dispatch({'version': 1, 'id': 'hdr', 'command': 'set_display_hdr', 'targetKey': 'target',
+                               'monitorDevicePath': 'path', 'allowInterrupt': True, 'enabled': False})
+        self.assertIsNone(self.service.brightness_vcp_target)
+
+    def test_input_mutation_clears_vcp_hint_even_when_operation_fails(self):
+        self.service.brightness_vcp_target = ('target', 'path')
+        with self.assertRaises(ValueError):
+            self.service.dispatch({'version': 1, 'id': 'input', 'command': 'write_display_input',
+                'targetKey': 'target', 'monitorDevicePath': 'path', 'allowInterrupt': True, 'value': 18})
+        self.assertIsNone(self.service.brightness_vcp_target)
+
+    def test_worker_failure_keeps_trace_and_total_elapsed(self):
+        trace = [{'stage': 'confirm', 'result': 'error', 'elapsedMs': 12, 'reason': 'not confirmed'}]
+        reply = Mock(returncode=0, stdout=json.dumps({'ok': False, 'error': 'not confirmed', 'controlTrace': trace}).encode())
+        with patch.object(controls.subprocess, 'run', return_value=reply), self.assertRaises(controls.ControlError) as raised:
+            controls.control_request({'command': 'set_display_brightness'})
+        self.assertEqual(raised.exception.controlTrace[:-1], trace)
+        self.assertEqual(raised.exception.controlTrace[-1]['stage'], 'worker')
+        self.assertGreaterEqual(raised.exception.controlElapsedMs, 0)
+
+    def test_http_mutation_error_preserves_timing_and_uncertain_outcome(self):
+        trace = [{'stage': 'write', 'result': 'error', 'elapsedMs': 3000, 'reason': 'DDC failed'}]
+        self.runner.side_effect = controls.ControlError('DDC failed', trace, 3100)
+        instance = server.create_server('127.0.0.1', 0, 123)
+        instance.display_ports = self.service
+        worker = threading.Thread(target=instance.serve_forever, kwargs={'poll_interval': .01})
+        worker.start()
+        try:
+            connection = http.client.HTTPConnection('127.0.0.1', instance.server_port, timeout=2)
+            connection.request('POST', '/api', json.dumps(self.brightness_request()), {'Content-Type': 'application/json'})
+            response = connection.getresponse()
+            result = json.loads(response.read())
+            connection.close()
+            self.assertEqual(response.status, 409)
+            self.assertTrue(result['error']['requestMayHaveApplied'])
+            self.assertEqual(result['error']['controlTrace'], trace)
+            self.assertEqual(result['error']['controlElapsedMs'], 3100)
+        finally:
+            instance.shutdown()
+            instance.server_close()
+            worker.join(2)
+
     def setUp(self):
         self.runner = Mock(return_value={'target': {'targetKey': 'target', 'monitorDevicePath': 'path'}})
         self.service = ports.DisplayPortService(Renderer(), controls_runner=self.runner)

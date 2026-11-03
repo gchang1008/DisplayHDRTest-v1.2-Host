@@ -16,6 +16,27 @@ from displayhdr_edid import monitor_instance
 
 COMMANDS = {"get_display_controls", "set_display_hdr", "set_display_brightness"}
 INTERNAL = {6, 11, 13, 0x80000000}
+
+
+def measure(trace, stage, call, *args):
+    started = time.perf_counter()
+    event = {'stage': stage, 'result': 'ok'}
+    try:
+        return call(*args)
+    except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as error:
+        event.update(result='error', reason=str(error)[:1024])
+        raise
+    finally:
+        event['elapsedMs'] = (time.perf_counter() - started) * 1000
+        trace.append(event)
+
+
+class ControlError(RuntimeError):
+    def __init__(self, message, trace, elapsed):
+        super().__init__(message)
+        self.controlTrace, self.controlElapsedMs = trace, elapsed
+
+
 WMI_SCRIPT = r'''
 $ErrorActionPreference = 'Stop'
 try {
@@ -69,7 +90,8 @@ def windows_brightness(identity, percent=None):
 
 
 class WindowsBrightness:
-    def __init__(self, user=None, dxva=None):
+    def __init__(self, user=None, dxva=None, trace=None):
+        self.trace = trace if trace is not None else []
         self.user = user or C.WinDLL('user32', use_last_error=True)
         self.dxva = dxva or C.WinDLL('dxva2', use_last_error=True)
         self.callback = C.WINFUNCTYPE(I32, C.c_void_p, C.c_void_p, C.POINTER(Rect), C.c_ssize_t)
@@ -107,7 +129,7 @@ class WindowsBrightness:
             raise ValueError('The monitor returned an invalid brightness range.')
         return minimum.value, current.value, maximum.value
 
-    def transfer(self, device, percent=None):
+    def transfer(self, device, percent=None, prefer_vcp=False):
         monitors = []
         callback = self.callback(lambda handle, dc, rect, data: monitors.append(handle) or 1)
         self.check(self.user.EnumDisplayMonitors(None, None, callback, 0))
@@ -128,31 +150,41 @@ class WindowsBrightness:
         self.check(self.dxva.GetPhysicalMonitorsFromHMONITOR(matches[0], 1, physical))
         try:
             caps, temperatures = U32(), U32()
-            low_level = False
+            low_level = prefer_vcp
             try:
-                self.check(self.dxva.GetMonitorCapabilities(physical[0].handle, C.byref(caps), C.byref(temperatures)))
-                if not caps.value & 2:
-                    raise ValueError('The monitor does not report DDC/CI brightness support.')
-                minimum, current, maximum = self.read_brightness(physical[0].handle)
+                if prefer_vcp:
+                    self.trace.append({'stage': 'capability', 'result': 'skipped', 'elapsedMs': 0,
+                                       'reason': 'Same output previously required VCP brightness.'})
+                else:
+                    measure(self.trace, 'capability', lambda: self.check(self.dxva.GetMonitorCapabilities(
+                        physical[0].handle, C.byref(caps), C.byref(temperatures))))
+                    if not caps.value & 2:
+                        raise ValueError('The monitor does not report DDC/CI brightness support.')
+                minimum, current, maximum = measure(self.trace, 'initial-read', self.read_brightness,
+                                                    physical[0].handle, low_level)
             except OSError as error:
-                if getattr(error, 'winerror', 0) & 0xffffffff != 0xc0262587:
+                if prefer_vcp or getattr(error, 'winerror', 0) & 0xffffffff != 0xc0262587:
                     raise
                 low_level = True
-                minimum, current, maximum = self.read_brightness(physical[0].handle, low_level=True)
+                minimum, current, maximum = measure(self.trace, 'initial-read', self.read_brightness,
+                                                    physical[0].handle, True)
             desired = round(minimum + (maximum - minimum) * percent / 100) if percent is not None else current
             changed = desired != current
             if changed:
                 bounds = minimum, maximum
                 if low_level:
-                    self.check(self.dxva.SetVCPFeature(physical[0].handle, 0x10, desired))
+                    measure(self.trace, 'write', lambda: self.check(self.dxva.SetVCPFeature(physical[0].handle, 0x10, desired)))
                 else:
-                    self.check(self.dxva.SetMonitorBrightness(physical[0].handle, desired))
-                minimum, current, maximum = self.read_brightness(physical[0].handle, low_level)
-                if current != desired or (minimum, maximum) != bounds:
-                    raise RuntimeError('DDC/CI brightness write was not confirmed; no retry was sent.')
+                    measure(self.trace, 'write', lambda: self.check(self.dxva.SetMonitorBrightness(physical[0].handle, desired)))
+                def confirm():
+                    values = self.read_brightness(physical[0].handle, low_level)
+                    if values[1] != desired or (values[0], values[2]) != bounds:
+                        raise RuntimeError('DDC/CI brightness write was not confirmed; no retry was sent.')
+                    return values
+                minimum, current, maximum = measure(self.trace, 'confirm', confirm)
             return {'minimum': minimum, 'maximum': maximum, 'current': current,
                     'percent': round((current - minimum) * 100 / (maximum - minimum)),
-                    'levels': [], 'changed': changed}
+                    'levels': [], 'changed': changed, 'ddcMethod': 'vcp' if low_level else 'high-level'}
         finally:
             self.check(self.dxva.DestroyPhysicalMonitors(1, physical))
 
@@ -164,8 +196,13 @@ class NativeControls:
         self.ddc = ddc
         self.windows = windows
         self.clock, self.sleep = clock, sleep
+        self.trace = []
+        self.prefer_vcp = False
 
     def endpoint(self, target=None):
+        return measure(self.trace, 'endpoint', self._endpoint, target)
+
+    def _endpoint(self, target=None):
         paths = self.display.query(QDC_ONLY_ACTIVE_PATHS).paths
         if len(paths) != 1 or not paths[0].flags & 1 or not paths[0].target.available:
             raise InputIdentityError('Enable exactly one display output before using Other tools.')
@@ -177,7 +214,7 @@ class NativeControls:
 
     def hdr_state(self, path):
         try:
-            state = self.color.get(path)
+            state = measure(self.trace, 'hdr', self.color.get, path)
             if state.get('legacyAdvancedColor'):
                 return {'supported': False, 'enabled': None, 'error': 'Windows does not provide an unambiguous HDR state on this interface.'}
             return {'supported': bool(state['supported']) and not state['limitedByPolicy'],
@@ -199,13 +236,17 @@ class NativeControls:
             return result
         try:
             if internal:
-                values = self.windows(identity, percent)
+                values = measure(self.trace, 'windows-brightness', self.windows, identity, percent)
+                result['ddcMethod'] = 'windows'
             else:
                 name = SourceName()
                 name.header = Header(1, C.sizeof(name), path.source.adapter, path.source.id)
                 WindowsApi.check(self.display.dll.DisplayConfigGetDeviceInfo(C.byref(name.header)))
                 self.endpoint({'targetKey': key(path.target), 'monitorDevicePath': identity})
-                values = (self.ddc or WindowsBrightness()).transfer(name.device, percent)
+                ddc = self.ddc or WindowsBrightness(trace=self.trace)
+                values = ddc.transfer(name.device, percent, True) if self.prefer_vcp else ddc.transfer(name.device, percent)
+                if 'ddcMethod' in values:
+                    result['ddcMethod'] = values['ddcMethod']
             result.update({k: values[k] for k in ('minimum', 'maximum', 'current', 'percent', 'levels')})
             result.update(supported=True, writable=True, changed=values.get('changed', False))
         except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as error:
@@ -215,6 +256,15 @@ class NativeControls:
         return result
 
     def run(self, request):
+        self.trace = []
+        self.prefer_vcp = request.get('_brightnessVcp') is True
+        started = time.perf_counter()
+        result = self._run(request)
+        controls = result if request['command'] == 'get_display_controls' else result['displayControls']
+        controls.update(controlTrace=self.trace, controlElapsedMs=(time.perf_counter() - started) * 1000)
+        return result
+
+    def _run(self, request):
         command = request['command']
         target = request if command != 'get_display_controls' else None
         path, identity = self.endpoint(target)
@@ -273,23 +323,41 @@ class NativeControls:
 
 
 def control_request(request):
-    result = subprocess.run([sys.executable, '-B', str(Path(__file__).resolve()), '--worker'],
-        input=json.dumps(request).encode('utf-8'), capture_output=True, timeout=10,
-        creationflags=subprocess.CREATE_NO_WINDOW)
+    started = time.perf_counter()
+    try:
+        result = subprocess.run([sys.executable, '-B', str(Path(__file__).resolve()), '--worker'],
+            input=json.dumps(request).encode('utf-8'), capture_output=True, timeout=10,
+            creationflags=subprocess.CREATE_NO_WINDOW)
+    except subprocess.TimeoutExpired as error:
+        error.controlElapsedMs = (time.perf_counter() - started) * 1000
+        error.controlTrace = [{'stage': 'worker', 'result': 'error', 'elapsedMs': error.controlElapsedMs,
+                               'reason': 'Display-control worker timed out; no retry was sent.'}]
+        raise
     if result.returncode or len(result.stdout) > 65536:
-        raise RuntimeError('Display-control worker failed; outcome may be unknown. No retry was sent.')
+        raise ControlError('Display-control worker failed; outcome may be unknown. No retry was sent.', [],
+                           (time.perf_counter() - started) * 1000)
     reply = json.loads(result.stdout.decode('utf-8'))
+    elapsed = (time.perf_counter() - started) * 1000
     if reply.get('ok') is not True:
-        raise RuntimeError(reply.get('error', 'Display control failed.'))
-    return reply['result']
+        trace = reply.get('controlTrace', [])
+        trace.append({'stage': 'worker', 'result': 'error', 'elapsedMs': elapsed,
+                      'reason': reply.get('error', 'Display control failed.')[:1024]})
+        raise ControlError(reply.get('error', 'Display control failed.'), trace, elapsed)
+    result = reply['result']
+    controls = result if request['command'] == 'get_display_controls' else result['displayControls']
+    controls['controlElapsedMs'] = elapsed
+    controls['controlTrace'].append({'stage': 'worker', 'result': 'ok', 'elapsedMs': elapsed})
+    return result
 
 
 if __name__ == '__main__':
     if sys.argv[1:] != ['--worker']:
         raise SystemExit('Only the fixed display-control worker entry point is supported.')
+    native = None
     try:
+        native = NativeControls()
         request = json.loads(sys.stdin.buffer.read(16385))
-        reply = {'ok': True, 'result': NativeControls().run(request)}
+        reply = {'ok': True, 'result': native.run(request)}
     except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as error:
-        reply = {'ok': False, 'error': str(error)}
+        reply = {'ok': False, 'error': str(error), 'controlTrace': native.trace if native else []}
     print(json.dumps(reply, ensure_ascii=True))

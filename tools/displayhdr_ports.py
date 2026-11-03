@@ -55,6 +55,7 @@ class DisplayPortService:
         self.edid_reader = edid_reader
         self.path_input_reader = path_input_reader
         self.controls_runner = controls_runner
+        self.brightness_vcp_target = None
         self.switch_mode = "pair"
         self.skip_ddc = False
         self.lock = threading.RLock()
@@ -196,6 +197,8 @@ class DisplayPortService:
             self.seen.add(identifier)
             self.running = True
             try:
+                if command in ('set_display_output', 'write_display_input', 'enable_display_hdr'):
+                    self.brightness_vcp_target = None
                 if command == "set_display_output" and not self.renderer.restart_supported():
                     raise ValueError("Output selection requires a managed Host launcher.")
                 controller = self.controller_factory()
@@ -275,7 +278,19 @@ class DisplayPortService:
             self.seen.add(identifier)
             self.running = True
             try:
-                result = self.controls_runner(request)
+                identity = (request.get('targetKey'), request.get('monitorDevicePath'))
+                worker_request = dict(request)
+                if command == 'set_display_brightness' and identity == self.brightness_vcp_target:
+                    worker_request['_brightnessVcp'] = True
+                self.brightness_vcp_target = None
+                result = self.controls_runner(worker_request)
+                controls = result if command == 'get_display_controls' else result.get('displayControls', {})
+                brightness = controls.get('brightness', {})
+                target = controls.get('target', {})
+                if (command != 'set_display_hdr' and brightness.get('ddcMethod') == 'vcp'
+                        and brightness.get('writable') is True and not target.get('internal')
+                        and controls.get('hdr', {}).get('enabled') is False):
+                    self.brightness_vcp_target = (target.get('targetKey'), target.get('monitorDevicePath'))
                 self.replies[identifier] = (dict(request), result)
                 return result
             finally:
