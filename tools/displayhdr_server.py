@@ -14,7 +14,7 @@ from displayhdr_supervisor import Supervisor
 from displayhdr_ports import COMMANDS as PORT_COMMANDS, DisplayPortService, Renderer
 
 
-MUTATION_COMMANDS = {"set_state", "key"} | (PORT_COMMANDS - {"get_display_ports", "get_display_port_status", "get_display_edid"})
+MUTATION_COMMANDS = {"set_state", "key"} | (PORT_COMMANDS - {"get_display_ports", "get_display_port_status", "get_display_edid", "read_display_input"})
 
 def failure(identifier, code, message, uncertain=False):
     return {"version": 1, "id": identifier, "ok": False,

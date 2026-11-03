@@ -9,13 +9,13 @@ import winreg
 from displayhdr_display_paths import (DisplayPaths, Header, TargetName, QDC_ALL_PATHS,
                                       QDC_ONLY_ACTIVE_PATHS, key)
 from displayhdr_hdr_control import HdrControl
-from displayhdr_monitor_input import InputIdentityError, probe_native, write_native
+from displayhdr_monitor_input import InputIdentityError, probe_native, read_native, write_native
 from displayhdr_window_presentation import WindowPresentation
 from displayhdr_edid import read_edid
 
 
 COMMANDS = {"get_display_ports", "get_display_port_status", "set_display_output",
-            "write_display_input", "enable_display_hdr", "present_display_window", "get_display_edid"}
+            "write_display_input", "read_display_input", "enable_display_hdr", "present_display_window", "get_display_edid"}
 
 
 def edid_hash(device_path):
@@ -45,12 +45,13 @@ class Renderer:
 class DisplayPortService:
     def __init__(self, renderer, controller_factory=DisplayPaths,
                  input_reader=probe_native, hdr_factory=HdrControl, window_factory=WindowPresentation,
-                 input_writer=write_native, edid_reader=read_edid):
+                 input_writer=write_native, edid_reader=read_edid, path_input_reader=read_native):
         self.renderer = renderer
         self.controller_factory, self.input_reader = controller_factory, input_reader
         self.hdr_factory, self.window_factory = hdr_factory, window_factory
         self.input_writer = input_writer
         self.edid_reader = edid_reader
+        self.path_input_reader = path_input_reader
         self.switch_mode = "pair"
         self.skip_ddc = False
         self.lock = threading.RLock()
@@ -75,6 +76,7 @@ class DisplayPortService:
                 ("supported", "manualSupported", "outputSelectionSupported", "targets", "activeTargetKey", "input", "pendingRestore")}))
             result["switchModes"] = ["active", "passive"]
             result["controlOwner"] = "client"
+            result["pathInputQuerySupported"] = True
             result["operation"] = {name: value for name, value in self.data["operation"].items()
                 if name in {*self.operation(), "state", "window"}}
             if self.data.get("error"):
@@ -158,7 +160,7 @@ class DisplayPortService:
         query = command in ("get_display_ports", "get_display_port_status")
         expected = common | ({"switchMode"} if "switchMode" in request else set()) if query else common | {
             "allowInterrupt", "targetKey", "monitorDevicePath"}
-        if command == "get_display_edid":
+        if command in ("get_display_edid", "read_display_input"):
             expected.remove("allowInterrupt")
         if command == "write_display_input":
             expected.add("value")
@@ -169,7 +171,7 @@ class DisplayPortService:
             raise ValueError("Unknown inventory mode.")
         if query:
             return self.inventory(mode) if command == "get_display_ports" else self.status()
-        if command != "get_display_edid" and request["allowInterrupt"] is not True:
+        if command not in ("get_display_edid", "read_display_input") and request["allowInterrupt"] is not True:
             raise ValueError("Explicit allowInterrupt=true is required.")
         if not all(isinstance(request[k], str) and request[k] for k in ("targetKey", "monitorDevicePath")):
             raise ValueError("A display endpoint and device identity are required.")
@@ -196,16 +198,27 @@ class DisplayPortService:
                 active = current["active"]["paths"]
                 if not active or not current.get("matchesDatabase"):
                     raise ValueError("Active output and matching Windows configuration are required.")
-                if command != "set_display_output" and len(active) != 1:
+                if command not in ("set_display_output", "read_display_input") and len(active) != 1:
                     raise ValueError("Exactly one active output is required for this operation.")
                 target, identity = request["targetKey"], request["monitorDevicePath"]
                 selected = next((p for p in controller.api.query(QDC_ALL_PATHS).paths
                                  if p.target.available and key(p.target) == target), None)
                 if selected is None or controller.api.device_path(selected) != identity:
                     raise ValueError("Requested display identity does not match the connected output.")
-                if command != "set_display_output" and (active[0]["targetKey"] != target or active[0].get("monitorDevicePath") != identity):
+                if command == "read_display_input" and not any(p["targetKey"] == target and p.get("monitorDevicePath") == identity for p in active):
+                    raise ValueError("DDC/CI read requires an active requested display identity.")
+                if command not in ("set_display_output", "read_display_input") and (active[0]["targetKey"] != target or active[0].get("monitorDevicePath") != identity):
                     raise ValueError("Operation requires the requested active display identity.")
-                if command == "get_display_edid":
+                if command == "read_display_input":
+                    result = self.path_input_reader(target, identity)
+                    after = controller.inspect()["active"]["paths"]
+                    if ({(p["targetKey"], p.get("monitorDevicePath")) for p in after} !=
+                            {(p["targetKey"], p.get("monitorDevicePath")) for p in active}
+                            or result.get("targetKey") != target or result.get("monitorDevicePath") != identity
+                            or result.get("ok") is not True or result.get("identityMismatch") is True
+                            or type(result.get("currentValue")) is not int or not 1 <= result["currentValue"] <= 255):
+                        raise ValueError("DDC/CI path identity or source could not be confirmed.")
+                elif command == "get_display_edid":
                     result = self.edid_reader(identity)
                     after = controller.inspect()["active"]["paths"]
                     if (len(after) != 1 or after[0]["targetKey"] != target

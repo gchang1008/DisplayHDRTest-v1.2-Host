@@ -183,3 +183,13 @@ Host 保留本機互斥、底層有界逾時與同一請求 id 不重複執行�
 
 
 `present_display_window` 在完成置頂後要求前景與鍵盤焦點，使用 GetGUIThreadInfo 查詢 renderer 執行緒的實際焦點。一般要求未達成時，暫時連接呼叫端、目前前景及 renderer 執行緒的輸入佇列以執行 SetForegroundWindow／SetFocus，隨後逆序解除。整個置前與檢查操作在獨立程序執行，逾時上限 5 秒；逾時終止該程序並回報錯誤，不重送操作或還原輸出。Windows 仍可能拒絕要求，實際驗證結果為準；不修改官方 renderer 或模擬左右鍵。
+
+### 指定啟用路徑的 DDC/CI 唯讀查詢
+
+`read_display_input` 只接受 `version:1`、非空 `id`、`command`、`targetKey`、`monitorDevicePath`，不接受 `allowInterrupt` 或來源值。可在多輸出時指定其中一條已啟用路徑；不選取輸出、不寫入 DDC/CI、不重啟 renderer、不控制視窗。`get_display_ports`／狀態回覆的 `pathInputQuerySupported:true` 表示支援此指令。
+
+```json
+{"version":1,"id":"path-read-1","command":"read_display_input","targetKey":"adapter/target","monitorDevicePath":"device path"}
+```
+
+回覆在 `action` 中包含 `command`、`targetKey`、`monitorDevicePath`、`ok:true` 與 `currentValue`（1–255），並保留原生讀值資訊。原生查詢在獨立程序執行，上限3秒；讀取前後核對全部啟用路徑與所選裝置身分。共用同一 GDI source 的鏡像配置、非唯一實體螢幕、未啟用或已變動的身分、無法確認的來源皆拒絕，不猜測或重試。Windows 配置一致性及本機互斥保護仍保留。是否由讀值選取唯一輸出由 Client 決定；Host不自行串接恢復流程。

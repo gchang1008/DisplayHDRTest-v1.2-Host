@@ -106,13 +106,19 @@ class WindowsDdc:
         return result
 
 
-def query_input(display=None, ddc=None, write=None):
+def query_input(display=None, ddc=None, write=None, read=None):
     started = time.monotonic()
     display = display or WindowsApi()
     paths = display.query(QDC_ONLY_ACTIVE_PATHS).paths
-    if len(paths) != 1 or not paths[0].flags & 1 or not paths[0].target.available:
+    if read is not None and write is not None:
+        raise ValueError('Read and write cannot be combined.')
+    selected = [p for p in paths if key(p.target) == read[0] and display.device_path(p) == read[1]] if read else paths
+    if len(selected) != 1 or not selected[0].flags & 1 or not selected[0].target.available or read is None and len(paths) != 1:
         raise InputIdentityError('Native input query requires exactly one active available endpoint.')
-    path = paths[0]
+    path = selected[0]
+    if sum(key(p.source) == key(path.source) for p in paths) != 1:
+        raise InputIdentityError('Mirrored output cannot identify a unique DDC/CI path.')
+    topology = sorted((key(p.target), display.device_path(p), key(p.source)) for p in paths)
     device_path = display.device_path(path)
     if not device_path:
         raise InputIdentityError('Active monitor identity is unavailable.')
@@ -129,19 +135,28 @@ def query_input(display=None, ddc=None, write=None):
     else:
         result = (ddc or WindowsDdc()).read(name.device)
     after = display.query(QDC_ONLY_ACTIVE_PATHS).paths
-    if (len(after) != 1 or not after[0].flags & 1 or key(after[0].target) != key(path.target)
-            or display.device_path(after[0]) != device_path):
+    if (sorted((key(p.target), display.device_path(p), key(p.source)) for p in after) != topology
+            or not all(p.flags & 1 and p.target.available for p in after)):
         raise InputIdentityError('Active monitor identity changed during the native query.')
     return {**result, 'targetKey': key(path.target), 'monitorDevicePath': device_path,
             'gdiDevice': name.device, 'durationSeconds': time.monotonic() - started}
 
 
-def probe_native():
-    result = subprocess.run([sys.executable, '-B', str(Path(__file__).resolve()), '--worker'],
+def probe_native(target=None, identity=None):
+    arguments = ['--worker'] if target is None else ['--read', target, identity]
+    result = subprocess.run([sys.executable, '-B', str(Path(__file__).resolve()), *arguments],
                             capture_output=True, timeout=3, creationflags=subprocess.CREATE_NO_WINDOW)
     if result.returncode or len(result.stdout) > 65536:
         raise RuntimeError('Native DDC/CI worker failed or exceeded the output bound.')
     return json.loads(result.stdout.decode('utf-8'))
+
+
+def read_native(target, identity):
+    result = probe_native(target, identity)
+    if result.get('ok') is not True:
+        error = InputIdentityError if result.get('identityMismatch') else RuntimeError
+        raise error(result.get('error', 'Native DDC/CI path query failed.'))
+    return result
 
 
 def native_value():
@@ -165,10 +180,12 @@ def write_native(target, identity, value):
 
 if __name__ == '__main__':
     writing = len(sys.argv) == 5 and sys.argv[1] == '--write'
-    if sys.argv[1:] != ['--worker'] and not writing:
+    reading = len(sys.argv) == 4 and sys.argv[1] == '--read'
+    if sys.argv[1:] != ['--worker'] and not writing and not reading:
         raise SystemExit('Only fixed native worker entry points are supported.')
     try:
-        reply = query_input(write=(sys.argv[2], sys.argv[3], int(sys.argv[4])) if writing else None)
+        reply = query_input(write=(sys.argv[2], sys.argv[3], int(sys.argv[4])) if writing else None,
+                            read=(sys.argv[2], sys.argv[3]) if reading else None)
     except (OSError, ValueError, RuntimeError) as error:
         reply = {'ok': False, 'errorCode': getattr(error, 'winerror', None) or getattr(error, 'errno', 0),
                  'error': str(error), 'identityMismatch': isinstance(error, InputIdentityError)}
