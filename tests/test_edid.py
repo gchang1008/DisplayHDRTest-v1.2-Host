@@ -34,7 +34,69 @@ def output_for(data):
         for i in range(0, len(data), 128)).encode()
 
 
+def override_edid(extensions=2, base_extensions=1):
+    data = bytearray(raw_edid(base_extensions)[:128] + bytes(128 * extensions))
+    data[128:135] = bytes((2, 3, 7, 0, 0xe2, 0x78, extensions))
+    data[255] = -sum(data[128:255]) % 256
+    return bytes(data)
+
+
 class EdidReaderTests(unittest.TestCase):
+    def test_override_count_detects_missing_blocks_and_complete_raw(self):
+        for count in (2, 5, 255):
+            data = override_edid(count)
+            for raw in (data[:256], data):
+                with self.subTest(count=count, length=len(raw)):
+                    result = edid.describe_edid(raw, 'wmi')
+                    self.assertEqual(result['expectedLength'], (count + 1) * 128)
+                    self.assertEqual(result['complete'], raw == data)
+                    self.assertTrue(result['checksumsValid'])
+                    self.assertEqual(base64.b64decode(result['dataBase64']), raw)
+                    self.assertEqual(bool(result['warnings']), raw != data)
+        self.assertEqual(edid.expected_length(override_edid(1, base_extensions=5)), 256)
+
+    def test_invalid_or_misplaced_override_does_not_replace_base_count(self):
+        for offset, value in ((126, 0), (128, 0x70), (129, 2), (130, 0), (130, 6),
+                              (130, 128), (132, 0x62), (132, 0xe1), (132, 0xe3),
+                              (133, 0x79), (134, 0)):
+            with self.subTest(offset=offset, value=value):
+                data = bytearray(override_edid())
+                data[offset] = value
+                self.assertEqual(edid.expected_length(data), (data[126] + 1) * 128)
+        data = bytearray(override_edid())
+        data[130] = 10
+        data[132:138] = bytes((0x42, 0, 0, 0xe2, 0x78, 2))
+        self.assertEqual(edid.expected_length(data), 256)
+        data = raw_edid(2)[:256] + override_edid()[128:256]
+        self.assertEqual(edid.expected_length(data), 384)
+        self.assertIsNone(edid.expected_length(bytes(127)))
+        self.assertEqual(edid.expected_length(override_edid()[:255]), 256)
+
+    def test_override_checksum_failure_remains_a_separate_warning(self):
+        data = bytearray(override_edid())
+        data[255] ^= 1
+        result = edid.describe_edid(data, 'wmi')
+        self.assertEqual(result['expectedLength'], 384)
+        self.assertTrue(result['complete'])
+        self.assertFalse(result['checksumsValid'])
+
+    def test_override_incomplete_wmi_can_use_longer_matching_cache(self):
+        data = override_edid()
+        with patch.object(edid, 'wmi_edid', return_value=(data[:256], ['Block 2 failed.'])), \
+                patch.object(edid, 'registry_edid', return_value=data) as registry:
+            result = edid.read_edid(IDENTITY)
+        registry.assert_called_once_with(IDENTITY)
+        self.assertEqual(result['source'], 'registry')
+        self.assertTrue(result['complete'])
+        self.assertEqual(result['expectedLength'], 384)
+        self.assertIn('cached driver data', result['warnings'][-1])
+        with patch.object(edid, 'wmi_edid', return_value=(data[:256], [])), \
+                patch.object(edid, 'registry_edid', return_value=data[:256]):
+            result = edid.read_edid(IDENTITY)
+        self.assertFalse(result['complete'])
+        self.assertEqual(result['source'], 'wmi')
+        self.assertEqual(result['byteLength'], 256)
+
     def test_three_blocks_and_larger_edid_are_not_truncated(self):
         for count in (0, 1, 2, 5, 255):
             data = raw_edid(count)
@@ -153,6 +215,36 @@ function Invoke-CimMethod {
         self.assertEqual(data, raw_edid(2))
         self.assertEqual(warnings, [])
         self.assertTrue(edid.describe_edid(data, 'wmi')['complete'])
+
+    def test_override_reads_beyond_base_count_and_can_shorten_it(self):
+        for count, base in ((2, 1), (5, 1), (1, 5)):
+            raw = override_edid(count, base)
+            blocks = [raw[i:i + 128] for i in range(0, len(raw), 128)]
+            with self.subTest(count=count, base=base):
+                data, warnings = self.run_script(['$true'] * len(blocks), blocks)
+                self.assertEqual(data, raw)
+                self.assertEqual(warnings, [])
+
+    def test_override_missing_third_block_preserves_two_and_warns(self):
+        raw = override_edid()
+        blocks = [raw[i:i + 128] for i in range(0, len(raw), 128)]
+        data, warnings = self.run_script(['$true', '$true', '$false'], blocks)
+        self.assertEqual(data, raw[:256])
+        self.assertIn('block 2 returned WMI error', warnings[0])
+        result = edid.describe_edid(data, 'wmi', warnings)
+        self.assertFalse(result['complete'])
+        self.assertEqual(result['expectedLength'], 384)
+
+    def test_malformed_or_misplaced_override_does_not_trigger_extra_read(self):
+        for offset, value in ((128, 0x70), (129, 2), (130, 6), (130, 128),
+                              (132, 0xe1), (132, 0xe3), (133, 0), (134, 0)):
+            with self.subTest(offset=offset, value=value):
+                raw = bytearray(override_edid())
+                raw[offset] = value
+                data, warnings = self.run_script(['$true', '$true', '$false'],
+                                                  [bytes(raw[:128]), bytes(raw[128:256])])
+                self.assertEqual(data, raw[:256])
+                self.assertEqual(warnings, [])
 
     def test_numeric_zero_and_mixed_boolean_success_are_accepted(self):
         for statuses in (['[uint32]0'] * 3, ['0', '$true', '[long]0']):

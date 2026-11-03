@@ -29,6 +29,13 @@ try {
         [Console]::Out.WriteLine((@{block=$index;data=[Convert]::ToBase64String($block)} | ConvertTo-Json -Compress))
         [Console]::Out.Flush()
         if ($index -eq 0) { $count = 1 + [int]$block[126] }
+        if ($index -eq 1 -and $block[0] -eq 2 -and $block[1] -ge 3 -and
+            $block[2] -ge 7 -and $block[2] -le 127 -and
+            ($block[4] -shr 5) -eq 7 -and ($block[4] -band 31) -ge 2 -and
+            (5 + ($block[4] -band 31)) -le $block[2] -and
+            $block[5] -eq 0x78 -and $block[6] -gt 0) {
+            $count = 1 + [int]$block[6]
+        }
     }
 } catch {
     [Console]::Out.WriteLine((@{error=$_.Exception.Message} | ConvertTo-Json -Compress))
@@ -86,9 +93,23 @@ def wmi_edid(device_path):
     return b''.join(blocks), warnings
 
 
+def expected_length(data):
+    if len(data) < 128:
+        return None
+    extensions = data[126]
+    if extensions and len(data) >= 256:
+        cta = data[128:256]
+        size = cta[4] & 31
+        if (cta[0] == 2 and cta[1] >= 3 and 7 <= cta[2] <= 127
+                and cta[4] >> 5 == 7 and size >= 2 and 5 + size <= cta[2]
+                and cta[5] == 0x78 and cta[6]):
+            extensions = cta[6]
+    return (extensions + 1) * 128
+
+
 def describe_edid(data, source, warnings=()):
     warnings = list(warnings)
-    expected = (data[126] + 1) * 128 if len(data) >= 128 else None
+    expected = expected_length(data)
     complete = expected is not None and len(data) == expected
     checksums = bool(data) and len(data) % 128 == 0 and all(
         sum(data[index:index + 128]) % 256 == 0 for index in range(0, len(data), 128))
@@ -111,7 +132,7 @@ def read_edid(device_path):
         data = b''
         warnings.append('WMI EDID reading failed: ' + str(error))
     source = 'wmi' if data else 'unavailable'
-    if len(data) < 128 or len(data) != (data[126] + 1) * 128:
+    if len(data) != expected_length(data):
         try:
             cached = registry_edid(device_path)
             if len(data) >= 128 and cached[:128] != data[:128]:

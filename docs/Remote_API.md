@@ -163,7 +163,7 @@ Host 保留本機互斥、底層有界逾時與同一請求 id 不重複執行�
 {"version":1,"id":"edid-1","command":"get_display_edid","targetKey":"adapter/target","monitorDevicePath":"device path"}
 ```
 
-成功回覆為 `{"version":1,"id":"edid-1","ok":true,"edid":{...}}`。`edid` 包含 `targetKey`、`monitorDevicePath`、`dataBase64`（原始 bytes 的 Base64）、`source`（`wmi`、`registry` 或 `unavailable`）、`byteLength`、`expectedLength`（無基礎區塊時為 null）、`complete`、`checksumsValid`、`warnings`（字串陣列）。`complete` 僅表示資料長度等於基礎區塊宣告的 `(extension count + 1) × 128`；標頭或 checksum 錯誤另列警告，不修補資料。
+成功回覆為 `{"version":1,"id":"edid-1","ok":true,"edid":{...}}`。`edid` 包含 `targetKey`、`monitorDevicePath`、`dataBase64`（原始 bytes 的 Base64）、`source`（`wmi`、`registry` 或 `unavailable`）、`byteLength`、`expectedLength`（無基礎區塊時為 null）、`complete`、`checksumsValid`、`warnings`（字串陣列）。`complete` 僅表示資料長度等於宣告的 `(extension count + 1) × 128`；第一個 CTA 延伸區塊（revision ≥ 3）的第一個 data block 若為有效、非零的 HF-EEODB（extended tag `0x78`），優先使用其延伸數，否則使用基礎區塊的延伸數。讀取與登錄備援的完整性判斷採相同規則；標頭或 checksum 錯誤另列警告，不修補資料。
 
 優先透過 Windows `WmiMonitorDescriptorMethods.WmiGetMonitorRawEEdidV1Block` 逐一讀取所有宣告區塊，不固定限制 256 bytes。固定 PowerShell worker 上限 8 秒，保留逾時前已取得的連續區塊；不重送讀取。不完整時可選用同一端點較長的登錄 EDID，回報 `source:registry` 及快取來源警告，不與 WMI 區塊拼接；已有 WMI 基礎區塊時，登錄基礎區塊須完全相同才可替代。Windows 驅動提供的 EDID 可能包含快取或 override，不宣稱為直接向面板 EEPROM 即時讀取。
 
