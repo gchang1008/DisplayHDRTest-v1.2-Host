@@ -81,7 +81,10 @@ class WindowsBrightness:
             (self.dxva.DestroyPhysicalMonitors, [U32, C.POINTER(PhysicalMonitor)]),
             (self.dxva.GetMonitorCapabilities, [C.c_void_p, C.POINTER(U32), C.POINTER(U32)]),
             (self.dxva.GetMonitorBrightness, [C.c_void_p, C.POINTER(U32), C.POINTER(U32), C.POINTER(U32)]),
-            (self.dxva.SetMonitorBrightness, [C.c_void_p, U32]))
+            (self.dxva.SetMonitorBrightness, [C.c_void_p, U32]),
+            (self.dxva.GetVCPFeatureAndVCPFeatureReply,
+             [C.c_void_p, C.c_ubyte, C.POINTER(I32), C.POINTER(U32), C.POINTER(U32)]),
+            (self.dxva.SetVCPFeature, [C.c_void_p, C.c_ubyte, U32]))
         for function, arguments in signatures:
             function.argtypes, function.restype = arguments, I32
 
@@ -89,6 +92,20 @@ class WindowsBrightness:
     def check(success):
         if not success:
             raise C.WinError(C.get_last_error())
+
+    def read_brightness(self, handle, low_level=False):
+        minimum, current, maximum = U32(), U32(), U32()
+        if low_level:
+            kind = I32()
+            self.check(self.dxva.GetVCPFeatureAndVCPFeatureReply(
+                handle, 0x10, C.byref(kind), C.byref(current), C.byref(maximum)))
+            if kind.value != 1:
+                raise ValueError('The brightness VCP is not a set-parameter control.')
+        else:
+            self.check(self.dxva.GetMonitorBrightness(handle, C.byref(minimum), C.byref(current), C.byref(maximum)))
+        if not minimum.value <= current.value <= maximum.value or maximum.value <= minimum.value:
+            raise ValueError('The monitor returned an invalid brightness range.')
+        return minimum.value, current.value, maximum.value
 
     def transfer(self, device, percent=None):
         monitors = []
@@ -111,23 +128,30 @@ class WindowsBrightness:
         self.check(self.dxva.GetPhysicalMonitorsFromHMONITOR(matches[0], 1, physical))
         try:
             caps, temperatures = U32(), U32()
-            self.check(self.dxva.GetMonitorCapabilities(physical[0].handle, C.byref(caps), C.byref(temperatures)))
-            if not caps.value & 2:
-                raise ValueError('The monitor does not report DDC/CI brightness support.')
-            minimum, current, maximum = U32(), U32(), U32()
-            self.check(self.dxva.GetMonitorBrightness(physical[0].handle, C.byref(minimum), C.byref(current), C.byref(maximum)))
-            if not minimum.value <= current.value <= maximum.value or maximum.value <= minimum.value:
-                raise ValueError('The monitor returned an invalid brightness range.')
-            desired = round(minimum.value + (maximum.value - minimum.value) * percent / 100) if percent is not None else current.value
-            changed = desired != current.value
+            low_level = False
+            try:
+                self.check(self.dxva.GetMonitorCapabilities(physical[0].handle, C.byref(caps), C.byref(temperatures)))
+                if not caps.value & 2:
+                    raise ValueError('The monitor does not report DDC/CI brightness support.')
+                minimum, current, maximum = self.read_brightness(physical[0].handle)
+            except OSError as error:
+                if getattr(error, 'winerror', 0) & 0xffffffff != 0xc0262587:
+                    raise
+                low_level = True
+                minimum, current, maximum = self.read_brightness(physical[0].handle, low_level=True)
+            desired = round(minimum + (maximum - minimum) * percent / 100) if percent is not None else current
+            changed = desired != current
             if changed:
-                bounds = minimum.value, maximum.value
-                self.check(self.dxva.SetMonitorBrightness(physical[0].handle, desired))
-                self.check(self.dxva.GetMonitorBrightness(physical[0].handle, C.byref(minimum), C.byref(current), C.byref(maximum)))
-                if current.value != desired or (minimum.value, maximum.value) != bounds:
+                bounds = minimum, maximum
+                if low_level:
+                    self.check(self.dxva.SetVCPFeature(physical[0].handle, 0x10, desired))
+                else:
+                    self.check(self.dxva.SetMonitorBrightness(physical[0].handle, desired))
+                minimum, current, maximum = self.read_brightness(physical[0].handle, low_level)
+                if current != desired or (minimum, maximum) != bounds:
                     raise RuntimeError('DDC/CI brightness write was not confirmed; no retry was sent.')
-            return {'minimum': minimum.value, 'maximum': maximum.value, 'current': current.value,
-                    'percent': round((current.value - minimum.value) * 100 / (maximum.value - minimum.value)),
+            return {'minimum': minimum, 'maximum': maximum, 'current': current,
+                    'percent': round((current - minimum) * 100 / (maximum - minimum)),
                     'levels': [], 'changed': changed}
         finally:
             self.check(self.dxva.DestroyPhysicalMonitors(1, physical))

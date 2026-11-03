@@ -184,6 +184,24 @@ class ControlsTests(unittest.TestCase):
 
 
 class DdcTests(unittest.TestCase):
+    def make_vcp(self, confirm=True, error=0xc0262587):
+        ddc, api = self.make()
+        def caps(*args):
+            C.set_last_error(C.c_int32(error).value)
+            return 0
+        api.GetMonitorCapabilities.side_effect = caps
+        values = [100, 200, 1]
+        def read(handle, code, kind, current, maximum):
+            kind._obj.value, current._obj.value, maximum._obj.value = values[2], values[0], values[1]
+            return 1
+        def write(handle, code, value):
+            if confirm:
+                values[0] = value
+            return 1
+        api.GetVCPFeatureAndVCPFeatureReply.side_effect = read
+        api.SetVCPFeature.side_effect = write
+        return ddc, api, values
+
     def make(self, confirm=True):
         user, dxva = Mock(), Mock()
         user.EnumDisplayMonitors.side_effect = lambda dc, rect, callback, data: callback(1, None, None, 0)
@@ -230,6 +248,93 @@ class DdcTests(unittest.TestCase):
             ddc.transfer(r'\\.\DISPLAY1', 70)
         api.SetMonitorBrightness.assert_called_once()
         api.DestroyPhysicalMonitors.assert_called_once()
+
+    def test_invalid_capabilities_string_reads_vcp_without_writing(self):
+        ddc, api, _ = self.make_vcp()
+        result = ddc.transfer(r'\\.\DISPLAY1')
+        self.assertEqual((result['minimum'], result['current'], result['maximum'], result['percent']), (0, 100, 200, 50))
+        self.assertEqual(api.GetVCPFeatureAndVCPFeatureReply.call_args.args[:2], (3, 0x10))
+        api.GetMonitorBrightness.assert_not_called()
+        api.SetVCPFeature.assert_not_called()
+        api.SetMonitorBrightness.assert_not_called()
+        api.DestroyPhysicalMonitors.assert_called_once()
+
+    def test_vcp_write_is_once_and_confirmed_using_same_method(self):
+        ddc, api, _ = self.make_vcp()
+        result = ddc.transfer(r'\\.\DISPLAY1', 70)
+        self.assertEqual((result['current'], result['percent'], result['changed']), (140, 70, True))
+        api.SetVCPFeature.assert_called_once_with(3, 0x10, 140)
+        self.assertEqual(api.GetVCPFeatureAndVCPFeatureReply.call_count, 2)
+        api.SetMonitorBrightness.assert_not_called()
+        api.DestroyPhysicalMonitors.assert_called_once()
+
+    def test_vcp_same_value_skips_write_and_invalid_reply_never_writes(self):
+        ddc, api, _ = self.make_vcp()
+        self.assertFalse(ddc.transfer(r'\\.\DISPLAY1', 50)['changed'])
+        api.SetVCPFeature.assert_not_called()
+        for values in ((100, 0, 1), (201, 200, 1), (100, 200, 0)):
+            ddc, api, state = self.make_vcp()
+            state[:] = values
+            with self.subTest(values=values), self.assertRaises(ValueError):
+                ddc.transfer(r'\\.\DISPLAY1', 70)
+            api.SetVCPFeature.assert_not_called()
+            api.DestroyPhysicalMonitors.assert_called_once()
+
+    def test_unconfirmed_or_failed_vcp_write_never_retries(self):
+        for fails in (False, True):
+            ddc, api, _ = self.make_vcp(confirm=False)
+            if fails:
+                api.SetVCPFeature.side_effect = OSError('Write failed')
+            with self.subTest(fails=fails), self.assertRaises((OSError, RuntimeError)):
+                ddc.transfer(r'\\.\DISPLAY1', 70)
+            api.SetVCPFeature.assert_called_once()
+            api.SetMonitorBrightness.assert_not_called()
+            api.DestroyPhysicalMonitors.assert_called_once()
+
+    def test_other_capability_errors_and_explicit_unsupported_do_not_fallback(self):
+        ddc, api, _ = self.make_vcp(error=5)
+        with self.assertRaises(OSError):
+            ddc.transfer(r'\\.\DISPLAY1', 70)
+        api.GetVCPFeatureAndVCPFeatureReply.assert_not_called()
+        api.SetVCPFeature.assert_not_called()
+        ddc, api = self.make()
+        api.GetMonitorCapabilities.side_effect = None
+        with self.assertRaisesRegex(ValueError, 'does not report'):
+            ddc.transfer(r'\\.\DISPLAY1', 70)
+        api.GetVCPFeatureAndVCPFeatureReply.assert_not_called()
+
+    def test_high_level_write_failure_does_not_start_vcp_fallback(self):
+        ddc, api = self.make()
+        api.SetMonitorBrightness.side_effect = C.WinError(C.c_int32(0xc0262587).value)
+        with self.assertRaises(OSError):
+            ddc.transfer(r'\\.\DISPLAY1', 70)
+        api.SetMonitorBrightness.assert_called_once()
+        api.GetVCPFeatureAndVCPFeatureReply.assert_not_called()
+        api.SetVCPFeature.assert_not_called()
+        api.DestroyPhysicalMonitors.assert_called_once()
+
+    def test_vcp_read_failure_or_changed_range_does_not_claim_success(self):
+        ddc, api, _ = self.make_vcp()
+        api.GetVCPFeatureAndVCPFeatureReply.side_effect = OSError('VCP unavailable')
+        with self.assertRaises(OSError):
+            ddc.transfer(r'\\.\DISPLAY1', 70)
+        api.SetVCPFeature.assert_not_called()
+        ddc, api, state = self.make_vcp()
+        def write(handle, code, value):
+            state[:2] = value, 250
+            return 1
+        api.SetVCPFeature.side_effect = write
+        with self.assertRaisesRegex(RuntimeError, 'not confirmed'):
+            ddc.transfer(r'\\.\DISPLAY1', 70)
+        api.SetVCPFeature.assert_called_once()
+        api.DestroyPhysicalMonitors.assert_called_once()
+
+    def test_malformed_capabilities_at_initial_brightness_read_can_fallback(self):
+        ddc, api, _ = self.make_vcp()
+        api.GetMonitorCapabilities.side_effect = lambda handle, caps, temperature: setattr(caps._obj, 'value', 2) or 1
+        api.GetMonitorBrightness.side_effect = C.WinError(C.c_int32(0xc0262587).value)
+        self.assertEqual(ddc.transfer(r'\\.\DISPLAY1')['percent'], 50)
+        api.SetVCPFeature.assert_not_called()
 
 
 class HdrPacketTests(unittest.TestCase):

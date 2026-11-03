@@ -19,7 +19,11 @@ try {
     $count = 1
     for ($index = 0; $index -lt $count; $index++) {
         $result = Invoke-CimMethod -InputObject $monitors[0] -MethodName WmiGetMonitorRawEEdidV1Block -Arguments @{BlockId=[byte]$index}
-        if ($result.ReturnValue -ne 0) { throw "EDID block $index returned WMI error $($result.ReturnValue)." }
+        $status = $result.ReturnValue
+        $success = if ($status -is [bool]) { $status } else {
+            ($status -is [int] -or $status -is [uint32] -or $status -is [long] -or $status -is [uint64]) -and $status -eq 0
+        }
+        if (-not $success) { throw "EDID block $index returned WMI error $status." }
         $block = [byte[]]$result.BlockContent
         if ($block.Length -ne 128) { throw "EDID block $index did not contain 128 bytes." }
         [Console]::Out.WriteLine((@{block=$index;data=[Convert]::ToBase64String($block)} | ConvertTo-Json -Compress))

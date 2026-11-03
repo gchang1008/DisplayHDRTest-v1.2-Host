@@ -167,6 +167,8 @@ Host 保留本機互斥、底層有界逾時與同一請求 id 不重複執行�
 
 優先透過 Windows `WmiMonitorDescriptorMethods.WmiGetMonitorRawEEdidV1Block` 逐一讀取所有宣告區塊，不固定限制 256 bytes。固定 PowerShell worker 上限 8 秒，保留逾時前已取得的連續區塊；不重送讀取。不完整時可選用同一端點較長的登錄 EDID，回報 `source:registry` 及快取來源警告，不與 WMI 區塊拼接；已有 WMI 基礎區塊時，登錄基礎區塊須完全相同才可替代。Windows 驅動提供的 EDID 可能包含快取或 override，不宣稱為直接向面板 EEPROM 即時讀取。
 
+WMI 方法的回傳值依實際型別處理：布林 `True` 成功、`False` 失敗；整數保留 `0` 成功、非零失敗的相容性。空值或字串不視為成功，每一區塊仍須包含128 bytes，再核對完整長度與checksum；不因回傳成功而略過資料驗證。
+
 缺少區塊、checksum 錯誤或無法讀取均回覆 `ok:true`，保留實際原始內容並列出原因，由呼叫端顯示警告及決定測試策略。身分不符、讀取期間輸出改變、欄位錯誤或本機操作忙碌仍拒絕。資料保存與跨 Input 排程由 Client 負責。
 
 原廠依據：[WmiGetMonitorRawEEdidV1Block](https://learn.microsoft.com/en-us/windows/win32/wmicoreprov/wmigetmonitorraweedidv1block-wmimonitordescriptormethods)、[Windows EDID 格式與 override](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/overriding-monitor-edids)。
@@ -182,6 +184,8 @@ Host 保留本機互斥、底層有界逾時與同一請求 id 不重複執行�
 `set_display_hdr` 接受共同欄位加 `allowInterrupt:true`、`targetKey`、`monitorDevicePath`、`enabled`（boolean）；`set_display_brightness` 以 `percent`（0–100 的整數）取代 enabled。兩者回覆 `action`，包含 `command`、目標身分、`changed` 及操作後的 `displayControls`。相同設定不重寫；寫入後讀回不符即報錯，不重送。同 id 的成功回覆可重取，但不得改內容；失敗／未知結果的同 id 不重新執行。
 
 內建亮度使用 `WmiMonitorBrightness` 與 `WmiMonitorBrightnessMethods.WmiSetBrightness`，只操作與目前 monitorDevicePath 精確對應的 active WMI instance，套用最接近的支援 level，再讀回確認。外接亮度使用 `GetMonitorCapabilities` 的 MC_CAPS_BRIGHTNESS、`GetMonitorBrightness`／`SetMonitorBrightness`，邏輯及實體 monitor 都須唯一；0–100% 對應實際 min/max 範圍，單次寫入後核對實際值。外接輸出的 Windows HDR 開啟或狀態未知時，不讀寫 DDC/CI 亮度，顯示限制原因；內建依其 Windows 亮度能力處理。
+
+外接亮度的能力查詢或首次亮度讀取若回覆 `ERROR_GRAPHICS_MCA_INVALID_CAPABILITIES_STRING`（0xC0262587），可改用低階 `GetVCPFeatureAndVCPFeatureReply` 唯讀查詢亮度 VCP 0x10。只有設定型控制及有效的目前值／最大值才可用，以0至回覆最大值映射百分比；使用者明確調整時才單次 `SetVCPFeature`，並用同一路徑核對讀值及範圍。其他錯誤、明確不支援亮度或無效VCP回覆仍失敗，不以寫入測試能力；寫入開始後不再換路徑重送。HDR、裝置身分及逾時保護不變。[低階讀取](https://learn.microsoft.com/en-us/windows/win32/api/lowlevelmonitorconfigurationapi/nf-lowlevelmonitorconfigurationapi-getvcpfeatureandvcpfeaturereply)、[低階寫入](https://learn.microsoft.com/en-us/windows/win32/api/lowlevelmonitorconfigurationapi/nf-lowlevelmonitorconfigurationapi-setvcpfeature)、[Microsoft 亮度 VCP 說明](https://github.com/microsoft/PowerToys/blob/main/doc/devdocs/modules/powerdisplay/design.md)。
 
 整個原生控制在固定參數子程序內執行，上限10秒；WMI worker另有4秒上限、HDR讀回最多5秒，逾時不重送。寫入前後核對 targetKey／monitorDevicePath，配置變化不回報成功。Host 保留本機互斥及請求防重複；呼叫端仍須在量測、配對、來源切換期間停用 Other 控制。舊 `enable_display_hdr` 的 Automation 行為與回覆契約不變。
 

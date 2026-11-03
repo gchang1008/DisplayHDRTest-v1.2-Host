@@ -127,6 +127,58 @@ class EdidReaderTests(unittest.TestCase):
         self.assertIn('differs from WMI', result['warnings'][0])
 
 
+class EdidWmiScriptTests(unittest.TestCase):
+    def run_script(self, statuses, blocks=None):
+        blocks = blocks if blocks is not None else [raw_edid(2)[i:i + 128] for i in range(0, 384, 128)]
+        encoded = base64.b64encode(json.dumps([base64.b64encode(block).decode('ascii')
+                                               for block in blocks]).encode()).decode('ascii')
+        mock_script = r'''
+$script:blocks = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('BLOCKS')) | ConvertFrom-Json
+$script:statuses = @(STATUSES)
+function Get-CimInstance {
+    param($Namespace, $ClassName)
+    [PSCustomObject]@{Active=$true; InstanceName='DISPLAY\DEL1234\4&1234&0&UID123_0'}
+}
+function Invoke-CimMethod {
+    param($InputObject, $MethodName, $Arguments)
+    $index = [int]$Arguments.BlockId
+    [PSCustomObject]@{ReturnValue=$script:statuses[$index]; BlockContent=[Convert]::FromBase64String($script:blocks[$index])}
+}
+'''.replace('BLOCKS', encoded).replace('STATUSES', ', '.join(statuses))
+        with patch.object(edid, 'WMI_SCRIPT', mock_script + edid.WMI_SCRIPT):
+            return edid.wmi_edid(IDENTITY)
+
+    def test_boolean_success_reads_all_declared_blocks(self):
+        data, warnings = self.run_script(['$true'] * 3)
+        self.assertEqual(data, raw_edid(2))
+        self.assertEqual(warnings, [])
+        self.assertTrue(edid.describe_edid(data, 'wmi')['complete'])
+
+    def test_numeric_zero_and_mixed_boolean_success_are_accepted(self):
+        for statuses in (['[uint32]0'] * 3, ['0', '$true', '[long]0']):
+            with self.subTest(statuses=statuses):
+                data, warnings = self.run_script(statuses)
+                self.assertEqual(data, raw_edid(2))
+                self.assertEqual(warnings, [])
+
+    def test_false_nonzero_null_and_string_statuses_do_not_succeed(self):
+        for status in ('$false', '[uint32]1', '$null', "'0'", "'True'"):
+            with self.subTest(status=status):
+                data, warnings = self.run_script([status] * 3)
+                self.assertEqual(data, b'')
+                self.assertIn('WMI error', warnings[0])
+
+    def test_failed_later_block_preserves_previous_raw_bytes(self):
+        data, warnings = self.run_script(['$true', '$false', '$true'])
+        self.assertEqual(data, raw_edid(2)[:128])
+        self.assertIn('block 1 returned WMI error', warnings[0])
+
+    def test_success_status_does_not_accept_wrong_block_length(self):
+        data, warnings = self.run_script(['$true'] * 3, [raw_edid(2)[:128], bytes(64), bytes(128)])
+        self.assertEqual(data, raw_edid(2)[:128])
+        self.assertIn('block 1 did not contain 128 bytes', warnings[0])
+
+
 class EdidServiceTests(unittest.TestCase):
     def setUp(self):
         self.controller = Controller()
