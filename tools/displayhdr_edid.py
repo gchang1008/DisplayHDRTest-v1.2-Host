@@ -16,27 +16,28 @@ try {
     $monitors = @(Get-CimInstance -Namespace root/wmi -ClassName WmiMonitorDescriptorMethods |
         Where-Object { $_.Active -and (($_.InstanceName -replace '_\d+$', '') -ieq $instance) })
     if ($monitors.Count -ne 1) { throw 'A unique active WMI monitor matching the output was not found.' }
-    $count = 1
-    for ($index = 0; $index -lt $count; $index++) {
-        $result = Invoke-CimMethod -InputObject $monitors[0] -MethodName WmiGetMonitorRawEEdidV1Block -Arguments @{BlockId=[byte]$index}
+    for ($index = 0; $index -lt 256; $index++) {
+        try {
+            $result = Invoke-CimMethod -InputObject $monitors[0] -MethodName WmiGetMonitorRawEEdidV1Block -Arguments @{BlockId=[byte]$index}
+        } catch {
+            [Console]::Out.WriteLine((@{end=$index;reason=$_.Exception.Message} | ConvertTo-Json -Compress))
+            break
+        }
         $status = $result.ReturnValue
         $success = if ($status -is [bool]) { $status } else {
             ($status -is [int] -or $status -is [uint32] -or $status -is [long] -or $status -is [uint64]) -and $status -eq 0
         }
-        if (-not $success) { throw "EDID block $index returned WMI error $status." }
+        if (-not $success -or $result.BlockType -eq 0) {
+            [Console]::Out.WriteLine((@{end=$index;reason="EDID block $index returned WMI status $status, block type $($result.BlockType)."} | ConvertTo-Json -Compress))
+            break
+        }
+        if ($result.BlockType -notin @(1, 2, 255)) { throw "EDID block $index returned an invalid WMI block type." }
         $block = [byte[]]$result.BlockContent
         if ($block.Length -ne 128) { throw "EDID block $index did not contain 128 bytes." }
         [Console]::Out.WriteLine((@{block=$index;data=[Convert]::ToBase64String($block)} | ConvertTo-Json -Compress))
         [Console]::Out.Flush()
-        if ($index -eq 0) { $count = 1 + [int]$block[126] }
-        if ($index -eq 1 -and $block[0] -eq 2 -and $block[1] -ge 3 -and
-            $block[2] -ge 7 -and $block[2] -le 127 -and
-            ($block[4] -shr 5) -eq 7 -and ($block[4] -band 31) -ge 2 -and
-            (5 + ($block[4] -band 31)) -le $block[2] -and
-            $block[5] -eq 0x78 -and $block[6] -gt 0) {
-            $count = 1 + [int]$block[6]
-        }
     }
+    if ($index -eq 256) { throw 'WMI EDID reading reached the 256-block limit; no further block can be queried.' }
 } catch {
     [Console]::Out.WriteLine((@{error=$_.Exception.Message} | ConvertTo-Json -Compress))
 }
@@ -80,6 +81,14 @@ def wmi_edid(device_path):
     for line in output.decode('utf-8-sig', errors='replace').splitlines():
         try:
             row = json.loads(line)
+            if 'end' in row:
+                if row['end'] != len(blocks):
+                    raise ValueError('Unexpected WMI EDID end block.')
+                data = b''.join(blocks)
+                expected = expected_length(data)
+                if expected is None or len(data) < expected:
+                    warnings.append('WMI EDID reading stopped: ' + str(row['reason']))
+                break
             if 'error' in row:
                 warnings.append(str(row['error']))
                 break
@@ -114,7 +123,7 @@ def describe_edid(data, source, warnings=()):
     checksums = bool(data) and len(data) % 128 == 0 and all(
         sum(data[index:index + 128]) % 256 == 0 for index in range(0, len(data), 128))
     if not complete:
-        warnings.append(f'Incomplete EDID: received {len(data)} bytes; expected {expected if expected is not None else "unknown"}.')
+        warnings.append(f'EDID length differs from declaration: received {len(data)} bytes; expected {expected if expected is not None else "unknown"}.')
     if data[:8] != bytes.fromhex('00ffffffffffff00'):
         warnings.append('EDID base block header is missing or invalid.')
     if not checksums:
@@ -132,11 +141,11 @@ def read_edid(device_path):
         data = b''
         warnings.append('WMI EDID reading failed: ' + str(error))
     source = 'wmi' if data else 'unavailable'
-    if len(data) != expected_length(data):
+    if len(data) < (expected_length(data) or 128):
         try:
             cached = registry_edid(device_path)
-            if len(data) >= 128 and cached[:128] != data[:128]:
-                warnings.append('Registry EDID base block differs from WMI; cached data was not substituted.')
+            if data and not cached.startswith(data):
+                warnings.append('Registry EDID differs from WMI; cached data was not substituted.')
             elif len(cached) > len(data):
                 data, source = cached, 'registry'
                 warnings.append('Using Windows registry EDID fallback; this is cached driver data, not a fresh physical read.')

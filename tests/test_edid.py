@@ -42,6 +42,29 @@ def override_edid(extensions=2, base_extensions=1):
 
 
 class EdidReaderTests(unittest.TestCase):
+    def test_extra_blocks_are_preserved_and_not_replaced_by_registry(self):
+        data = raw_edid(0) + bytes(256)
+        with patch.object(edid, 'wmi_edid', return_value=(data, [])), \
+                patch.object(edid, 'registry_edid') as registry:
+            result = edid.read_edid(IDENTITY)
+        registry.assert_not_called()
+        self.assertEqual(base64.b64decode(result['dataBase64']), data)
+        self.assertEqual(result['expectedLength'], 128)
+        self.assertFalse(result['complete'])
+        self.assertTrue(result['checksumsValid'])
+        self.assertIn('differs from declaration', result['warnings'][0])
+
+    def test_registry_cannot_replace_a_different_wmi_extension(self):
+        data = raw_edid(3)[:256]
+        cached = bytearray(raw_edid(3))
+        cached[130] = 1
+        with patch.object(edid, 'wmi_edid', return_value=(data, [])), \
+                patch.object(edid, 'registry_edid', return_value=bytes(cached)):
+            result = edid.read_edid(IDENTITY)
+        self.assertEqual(result['source'], 'wmi')
+        self.assertEqual(base64.b64decode(result['dataBase64']), data)
+        self.assertIn('differs from WMI', result['warnings'][0])
+
     def test_override_count_detects_missing_blocks_and_complete_raw(self):
         for count in (2, 5, 255):
             data = override_edid(count)
@@ -131,7 +154,7 @@ class EdidReaderTests(unittest.TestCase):
         self.assertEqual(json.loads(run.call_args.kwargs['input']), r'DISPLAY\DEL1234\4&1234&0&UID123')
         self.assertNotIn(IDENTITY, run.call_args.args[0])
         script = base64.b64decode(run.call_args.args[0][-1]).decode('utf-16-le')
-        self.assertIn('$count = 1 + [int]$block[126]', script)
+        self.assertIn('$index -lt 256', script)
         self.assertIn('WmiGetMonitorRawEEdidV1Block', script)
         self.assertEqual(run.call_args.kwargs['creationflags'], subprocess.CREATE_NO_WINDOW)
 
@@ -143,6 +166,16 @@ class EdidReaderTests(unittest.TestCase):
         self.assertEqual(actual, data)
         self.assertIn('8 seconds', warnings[0])
         run.assert_called_once()
+
+    def test_timeout_after_declaration_retains_extra_blocks_and_warning(self):
+        data = raw_edid(0) + bytes(256)
+        timeout = subprocess.TimeoutExpired('powershell', 8, output=output_for(data))
+        with patch.object(edid.subprocess, 'run', side_effect=timeout), \
+                patch.object(edid, 'registry_edid') as registry:
+            result = edid.read_edid(IDENTITY)
+        registry.assert_not_called()
+        self.assertEqual(base64.b64decode(result['dataBase64']), data)
+        self.assertTrue(any('8 seconds' in warning for warning in result['warnings']))
 
     def test_noncontiguous_blocks_are_not_concatenated(self):
         lines = output_for(raw_edid(2)).splitlines()
@@ -190,13 +223,14 @@ class EdidReaderTests(unittest.TestCase):
 
 
 class EdidWmiScriptTests(unittest.TestCase):
-    def run_script(self, statuses, blocks=None):
+    def run_script(self, statuses, blocks=None, block_types=None, repeat=False):
         blocks = blocks if blocks is not None else [raw_edid(2)[i:i + 128] for i in range(0, 384, 128)]
         encoded = base64.b64encode(json.dumps([base64.b64encode(block).decode('ascii')
                                                for block in blocks]).encode()).decode('ascii')
         mock_script = r'''
 $script:blocks = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('BLOCKS')) | ConvertFrom-Json
 $script:statuses = @(STATUSES)
+$script:types = @(TYPES)
 function Get-CimInstance {
     param($Namespace, $ClassName)
     [PSCustomObject]@{Active=$true; InstanceName='DISPLAY\DEL1234\4&1234&0&UID123_0'}
@@ -204,11 +238,58 @@ function Get-CimInstance {
 function Invoke-CimMethod {
     param($InputObject, $MethodName, $Arguments)
     $index = [int]$Arguments.BlockId
-    [PSCustomObject]@{ReturnValue=$script:statuses[$index]; BlockContent=[Convert]::FromBase64String($script:blocks[$index])}
+    if (REPEAT) { $index = 0 }
+    if ($index -ge $script:blocks.Count) { throw 'No more EDID blocks.' }
+    [PSCustomObject]@{ReturnValue=$script:statuses[$index]; BlockType=$script:types[$index]; BlockContent=[Convert]::FromBase64String($script:blocks[$index])}
 }
-'''.replace('BLOCKS', encoded).replace('STATUSES', ', '.join(statuses))
+'''.replace('BLOCKS', encoded).replace('STATUSES', ', '.join(statuses)).replace(
+            'TYPES', ', '.join(str(value) for value in (block_types or [255] * len(blocks)))).replace(
+            'REPEAT', '$true' if repeat else '$false')
         with patch.object(edid, 'WMI_SCRIPT', mock_script + edid.WMI_SCRIPT):
             return edid.wmi_edid(IDENTITY)
+
+    def test_all_available_blocks_are_read_even_if_declared_count_is_too_small(self):
+        for declared in (0, 1):
+            raw = raw_edid(declared)[:128] + bytes(384)
+            data, warnings = self.run_script(['$true'] * 4,
+                                            [raw[i:i + 128] for i in range(0, 512, 128)])
+            self.assertEqual(data, raw)
+            self.assertEqual(warnings, [])
+            self.assertIn('differs from declaration', edid.describe_edid(data, 'wmi')['warnings'][0])
+
+    def test_uninitialized_type_stops_without_appending_returned_bytes(self):
+        for declared in (0, 2):
+            blocks = [raw_edid(declared)[:128], bytes(128), bytes(128)]
+            data, warnings = self.run_script(['$true'] * 3, blocks, [1, 0, 255])
+            self.assertEqual(data, blocks[0])
+            self.assertEqual(bool(warnings), declared != 0)
+            if warnings:
+                self.assertIn('block type 0', warnings[0])
+
+    def test_invalid_type_or_length_after_declared_end_is_still_a_warning(self):
+        blocks = [raw_edid(0), bytes(128)]
+        data, warnings = self.run_script(['$true'] * 2, blocks, [1, 99])
+        self.assertEqual(data, blocks[0])
+        self.assertIn('invalid WMI block type', warnings[0])
+        data, warnings = self.run_script(['$true'] * 2, [blocks[0], bytes(64)])
+        self.assertEqual(data, blocks[0])
+        self.assertIn('did not contain 128 bytes', warnings[0])
+
+    def test_256_block_limit_retains_repeated_blocks_and_warns(self):
+        data, warnings = self.run_script(['$true'], [raw_edid(0)], repeat=True)
+        self.assertEqual(data, raw_edid(0) * 256)
+        self.assertEqual(len(data), 32768)
+        self.assertIn('256-block limit', warnings[0])
+
+    def test_failure_status_after_declared_end_is_normal_availability_end(self):
+        data, warnings = self.run_script(['$true', '$false'], [raw_edid(0), bytes(128)])
+        self.assertEqual(data, raw_edid(0))
+        self.assertEqual(warnings, [])
+
+    def test_method_exception_before_declared_end_reports_reason(self):
+        data, warnings = self.run_script(['$true'], [raw_edid(2)[:128]])
+        self.assertEqual(data, raw_edid(2)[:128])
+        self.assertIn('No more EDID blocks', warnings[0])
 
     def test_boolean_success_reads_all_declared_blocks(self):
         data, warnings = self.run_script(['$true'] * 3)
@@ -216,7 +297,7 @@ function Invoke-CimMethod {
         self.assertEqual(warnings, [])
         self.assertTrue(edid.describe_edid(data, 'wmi')['complete'])
 
-    def test_override_reads_beyond_base_count_and_can_shorten_it(self):
+    def test_override_does_not_limit_available_block_reading(self):
         for count, base in ((2, 1), (5, 1), (1, 5)):
             raw = override_edid(count, base)
             blocks = [raw[i:i + 128] for i in range(0, len(raw), 128)]
@@ -230,12 +311,12 @@ function Invoke-CimMethod {
         blocks = [raw[i:i + 128] for i in range(0, len(raw), 128)]
         data, warnings = self.run_script(['$true', '$true', '$false'], blocks)
         self.assertEqual(data, raw[:256])
-        self.assertIn('block 2 returned WMI error', warnings[0])
+        self.assertIn('block 2 returned WMI status', warnings[0])
         result = edid.describe_edid(data, 'wmi', warnings)
         self.assertFalse(result['complete'])
         self.assertEqual(result['expectedLength'], 384)
 
-    def test_malformed_or_misplaced_override_does_not_trigger_extra_read(self):
+    def test_malformed_override_does_not_prevent_probing_to_api_end(self):
         for offset, value in ((128, 0x70), (129, 2), (130, 6), (130, 128),
                               (132, 0xe1), (132, 0xe3), (133, 0), (134, 0)):
             with self.subTest(offset=offset, value=value):
@@ -258,12 +339,12 @@ function Invoke-CimMethod {
             with self.subTest(status=status):
                 data, warnings = self.run_script([status] * 3)
                 self.assertEqual(data, b'')
-                self.assertIn('WMI error', warnings[0])
+                self.assertIn('WMI status', warnings[0])
 
     def test_failed_later_block_preserves_previous_raw_bytes(self):
         data, warnings = self.run_script(['$true', '$false', '$true'])
         self.assertEqual(data, raw_edid(2)[:128])
-        self.assertIn('block 1 returned WMI error', warnings[0])
+        self.assertIn('block 1 returned WMI status', warnings[0])
 
     def test_success_status_does_not_accept_wrong_block_length(self):
         data, warnings = self.run_script(['$true'] * 3, [raw_edid(2)[:128], bytes(64), bytes(128)])

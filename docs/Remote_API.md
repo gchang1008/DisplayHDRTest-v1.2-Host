@@ -165,7 +165,9 @@ Host 保留本機互斥、底層有界逾時與同一請求 id 不重複執行�
 
 成功回覆為 `{"version":1,"id":"edid-1","ok":true,"edid":{...}}`。`edid` 包含 `targetKey`、`monitorDevicePath`、`dataBase64`（原始 bytes 的 Base64）、`source`（`wmi`、`registry` 或 `unavailable`）、`byteLength`、`expectedLength`（無基礎區塊時為 null）、`complete`、`checksumsValid`、`warnings`（字串陣列）。`complete` 僅表示資料長度等於宣告的 `(extension count + 1) × 128`；第一個 CTA 延伸區塊（revision ≥ 3）的第一個 data block 若為有效、非零的 HF-EEODB（extended tag `0x78`），優先使用其延伸數，否則使用基礎區塊的延伸數。讀取與登錄備援的完整性判斷採相同規則；標頭或 checksum 錯誤另列警告，不修補資料。
 
-優先透過 Windows `WmiMonitorDescriptorMethods.WmiGetMonitorRawEEdidV1Block` 逐一讀取所有宣告區塊，不固定限制 256 bytes。固定 PowerShell worker 上限 8 秒，保留逾時前已取得的連續區塊；不重送讀取。不完整時可選用同一端點較長的登錄 EDID，回報 `source:registry` 及快取來源警告，不與 WMI 區塊拼接；已有 WMI 基礎區塊時，登錄基礎區塊須完全相同才可替代。Windows 驅動提供的 EDID 可能包含快取或 override，不宣稱為直接向面板 EEPROM 即時讀取。
+優先透過 Windows `WmiMonitorDescriptorMethods.WmiGetMonitorRawEEdidV1Block` 從區塊 0 逐一探測，最多讀取 256 個區塊（0–255，共 32768 bytes）；宣告長度僅用於檢查，不作為停止條件。方法失敗、失敗狀態或未初始化的 `BlockType:0` 表示當次無法再提供區塊；若尚未取得宣告長度則另列停止原因，已達宣告長度後的上述停止不額外視為錯誤。未知 block type 或非 128-byte 資料仍警告並停止；不跳過失敗區塊、不重送讀取。固定 PowerShell worker 上限 8 秒，逾時或達到 256 區塊上限時警告並保留已取得的連續區塊。超過宣告的資料照實保存、回報長度不符，不裁切、不因內容重複或全零而丟棄；`complete` 仍只表示長度符合宣告，不代表已證明實體資料結尾。
+
+少於宣告長度時可選用同一端點較長的登錄 EDID，回報 `source:registry` 及快取來源警告，不與 WMI 區塊拼接；登錄資料須完整保留已讀到的全部 WMI bytes 作為前綴才可替代。已達或超過宣告長度的 WMI 資料不由登錄資料替代。Windows 驅動提供的 EDID 可能包含快取或 override，不宣稱為直接向面板 EEPROM 即時讀取，也不代表顯示卡底層 DDC／AUX 交易紀錄。
 
 WMI 方法的回傳值依實際型別處理：布林 `True` 成功、`False` 失敗；整數保留 `0` 成功、非零失敗的相容性。空值或字串不視為成功，每一區塊仍須包含128 bytes，再核對完整長度與checksum；不因回傳成功而略過資料驗證。
 
