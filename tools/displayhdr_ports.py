@@ -12,10 +12,11 @@ from displayhdr_hdr_control import HdrControl
 from displayhdr_monitor_input import InputIdentityError, probe_native, read_native, write_native
 from displayhdr_window_presentation import WindowPresentation
 from displayhdr_edid import read_edid
+from displayhdr_controls import COMMANDS as CONTROL_COMMANDS, control_request
 
 
 COMMANDS = {"get_display_ports", "get_display_port_status", "set_display_output",
-            "write_display_input", "read_display_input", "enable_display_hdr", "present_display_window", "get_display_edid"}
+            "write_display_input", "read_display_input", "enable_display_hdr", "present_display_window", "get_display_edid"} | CONTROL_COMMANDS
 
 
 def edid_hash(device_path):
@@ -45,13 +46,15 @@ class Renderer:
 class DisplayPortService:
     def __init__(self, renderer, controller_factory=DisplayPaths,
                  input_reader=probe_native, hdr_factory=HdrControl, window_factory=WindowPresentation,
-                 input_writer=write_native, edid_reader=read_edid, path_input_reader=read_native):
+                 input_writer=write_native, edid_reader=read_edid, path_input_reader=read_native,
+                 controls_runner=control_request):
         self.renderer = renderer
         self.controller_factory, self.input_reader = controller_factory, input_reader
         self.hdr_factory, self.window_factory = hdr_factory, window_factory
         self.input_writer = input_writer
         self.edid_reader = edid_reader
         self.path_input_reader = path_input_reader
+        self.controls_runner = controls_runner
         self.switch_mode = "pair"
         self.skip_ddc = False
         self.lock = threading.RLock()
@@ -156,6 +159,8 @@ class DisplayPortService:
         if self.closed:
             raise ValueError("The display-port service has closed.")
         command = request["command"]
+        if command in CONTROL_COMMANDS:
+            return self.controls(request)
         common = {"version", "id", "command"}
         query = command in ("get_display_ports", "get_display_port_status")
         expected = common | ({"switchMode"} if "switchMode" in request else set()) if query else common | {
@@ -236,6 +241,41 @@ class DisplayPortService:
                 else:
                     result = self.window_factory().bring_front(self.renderer.pid(), keep_on_top=True)
                 result = {"command": command, "targetKey": target, "monitorDevicePath": identity, **result}
+                self.replies[identifier] = (dict(request), result)
+                return result
+            finally:
+                self.running = False
+
+    def controls(self, request):
+        command = request['command']
+        expected = {'version', 'id', 'command'}
+        if command != 'get_display_controls':
+            expected |= {'allowInterrupt', 'targetKey', 'monitorDevicePath',
+                         'enabled' if command == 'set_display_hdr' else 'percent'}
+        if (set(request) != expected or type(request.get('version')) is not int or request['version'] != 1
+                or not isinstance(request.get('id'), str) or not request['id']):
+            raise ValueError('Unexpected or missing display-control fields.')
+        if command != 'get_display_controls':
+            if (request['allowInterrupt'] is not True or not all(isinstance(request[k], str) and request[k]
+                    for k in ('targetKey', 'monitorDevicePath'))):
+                raise ValueError('Explicit allowInterrupt=true and a display identity are required.')
+            if command == 'set_display_hdr' and type(request['enabled']) is not bool:
+                raise ValueError('HDR enabled must be boolean.')
+            if command == 'set_display_brightness' and (type(request['percent']) is not int or not 0 <= request['percent'] <= 100):
+                raise ValueError('Brightness percent must be an integer from 0 to 100.')
+        with self.lock:
+            identifier = request['id']
+            if identifier in self.replies:
+                previous, result = self.replies[identifier]
+                if previous != request:
+                    raise ValueError('Request id belongs to a different operation.')
+                return result
+            if identifier in self.seen or self.running:
+                raise ValueError('A display operation is running or this request was already attempted; no command was repeated.')
+            self.seen.add(identifier)
+            self.running = True
+            try:
+                result = self.controls_runner(request)
                 self.replies[identifier] = (dict(request), result)
                 return result
             finally:

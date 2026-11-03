@@ -171,6 +171,22 @@ Host 保留本機互斥、底層有界逾時與同一請求 id 不重複執行�
 
 原廠依據：[WmiGetMonitorRawEEdidV1Block](https://learn.microsoft.com/en-us/windows/win32/wmicoreprov/wmigetmonitorraweedidv1block-wmimonitordescriptormethods)、[Windows EDID 格式與 override](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/overriding-monitor-edids)。
 
+### Other 顯示控制
+
+以下操作不需要 Input 配對，但都要求目前唯一啟用且身分可核對的輸出，不切換 Input、不修改 Windows 輸出配置、不控制圖樣或重啟 renderer。`get_display_controls` 是唯讀查詢，只接受 `version:1`、非空 `id`、`command`，回覆 `displayControls`：
+
+- `target`：`targetKey`、`monitorDevicePath`、`name`、`connection`、`internal`。內建識別依 Windows connector technology：LVDS、embedded DisplayPort、embedded UDI、Internal。
+- `hdr`：`supported`、`enabled`（true／false／null）、`error`。狀態直接讀 Windows；舊 advanced-color 介面無法區分 HDR／WCG 時回覆 null 並停用此工具的 HDR 控制，不把 advanced color 當成 HDR。
+- `brightness`：`supported`、`writable`、`method`（`windows`／`ddc`）、`minimum`、`maximum`、`current`、`percent`、`levels`、`error`。不可用值為 null，層級為空陣列；值表示設定比例，不是實測 cd/m²。讀取能力失敗保留錯誤，不假造成功或亮度值。
+
+`set_display_hdr` 接受共同欄位加 `allowInterrupt:true`、`targetKey`、`monitorDevicePath`、`enabled`（boolean）；`set_display_brightness` 以 `percent`（0–100 的整數）取代 enabled。兩者回覆 `action`，包含 `command`、目標身分、`changed` 及操作後的 `displayControls`。相同設定不重寫；寫入後讀回不符即報錯，不重送。同 id 的成功回覆可重取，但不得改內容；失敗／未知結果的同 id 不重新執行。
+
+內建亮度使用 `WmiMonitorBrightness` 與 `WmiMonitorBrightnessMethods.WmiSetBrightness`，只操作與目前 monitorDevicePath 精確對應的 active WMI instance，套用最接近的支援 level，再讀回確認。外接亮度使用 `GetMonitorCapabilities` 的 MC_CAPS_BRIGHTNESS、`GetMonitorBrightness`／`SetMonitorBrightness`，邏輯及實體 monitor 都須唯一；0–100% 對應實際 min/max 範圍，單次寫入後核對實際值。外接輸出的 Windows HDR 開啟或狀態未知時，不讀寫 DDC/CI 亮度，顯示限制原因；內建依其 Windows 亮度能力處理。
+
+整個原生控制在固定參數子程序內執行，上限10秒；WMI worker另有4秒上限、HDR讀回最多5秒，逾時不重送。寫入前後核對 targetKey／monitorDevicePath，配置變化不回報成功。Host 保留本機互斥及請求防重複；呼叫端仍須在量測、配對、來源切換期間停用 Other 控制。舊 `enable_display_hdr` 的 Automation 行為與回覆契約不變。
+
+原廠依據：[Windows connector types](https://learn.microsoft.com/en-us/windows/win32/api/wingdi/ne-wingdi-displayconfig_video_output_technology)、[WmiSetBrightness](https://learn.microsoft.com/en-us/windows/win32/wmicoreprov/wmisetbrightness-method-in-class-wmimonitorbrightnessmethods)、[GetMonitorBrightness](https://learn.microsoft.com/en-us/windows/win32/api/highlevelmonitorconfigurationapi/nf-highlevelmonitorconfigurationapi-getmonitorbrightness)、[SetMonitorBrightness](https://learn.microsoft.com/en-us/windows/win32/api/highlevelmonitorconfigurationapi/nf-highlevelmonitorconfigurationapi-setmonitorbrightness)。
+
 ### 呼叫端流程責任
 
 - 配對：呼叫端指定起始畫面、選擇 Windows 輸出、必要重啟、輪詢來源及命名。Host 不追加畫面指令。

@@ -55,10 +55,13 @@ class WindowsColorApi:
                 'bitsPerColorChannel': packet.bitsPerColorChannel}
 
     def enable(self, path, state):
+        self.set(path, state, True)
+
+    def set(self, path, state, enabled):
         packet = ColorState()
         packet.header = Header(10 if state['legacyAdvancedColor'] else 16,
                                C.sizeof(packet), path.target.adapter, path.target.id)
-        packet.value = 1
+        packet.value = int(enabled)
         WindowsApi.check(self.dll.DisplayConfigSetDeviceInfo(C.byref(packet.header)))
 
 

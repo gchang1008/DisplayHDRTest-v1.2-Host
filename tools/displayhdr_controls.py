@@ -1,0 +1,271 @@
+"""Bounded, endpoint-verified Windows HDR and physical brightness operations."""
+import base64
+import ctypes as C
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import time
+
+from displayhdr_display_paths import Header, I32, U32, TargetName, WindowsApi, QDC_ONLY_ACTIVE_PATHS, key
+from displayhdr_hdr_control import WindowsColorApi
+from displayhdr_monitor_input import MonitorInfo, PhysicalMonitor, Rect, SourceName, InputIdentityError
+from displayhdr_edid import monitor_instance
+
+
+COMMANDS = {"get_display_controls", "set_display_hdr", "set_display_brightness"}
+INTERNAL = {6, 11, 13, 0x80000000}
+WMI_SCRIPT = r'''
+$ErrorActionPreference = 'Stop'
+try {
+    $request = [Console]::In.ReadToEnd() | ConvertFrom-Json
+    $rows = @(Get-CimInstance -Namespace root/wmi -ClassName WmiMonitorBrightness |
+        Where-Object { $_.Active -and (($_.InstanceName -replace '_\d+$', '') -ieq $request.instance) })
+    if ($rows.Count -ne 1) { throw 'A unique active Windows brightness device was not found.' }
+    $levels = @($rows[0].Level | Sort-Object -Unique)
+    if ($levels.Count -eq 0) { throw 'Windows did not report supported brightness levels.' }
+    $methods = @(Get-CimInstance -Namespace root/wmi -ClassName WmiMonitorBrightnessMethods |
+        Where-Object { $_.Active -and $_.InstanceName -ieq $rows[0].InstanceName })
+    if ($methods.Count -ne 1) { throw 'A unique Windows brightness setter was not found.' }
+    $changed = $false
+    if ($null -ne $request.percent) {
+        $desired = $levels | Sort-Object @{Expression={ [Math]::Abs([int]$_ - [int]$request.percent) }}, @{Expression={ [int]$_ }} | Select-Object -First 1
+        if ([int]$rows[0].CurrentBrightness -ne [int]$desired) {
+            $reply = Invoke-CimMethod -InputObject $methods[0] -MethodName WmiSetBrightness -Arguments @{Timeout=[uint32]0; Brightness=[byte]$desired}
+            if ($reply.ReturnValue -ne 0) { throw "Windows brightness write returned error $($reply.ReturnValue)." }
+            $changed = $true
+        }
+        $rows = @(Get-CimInstance -Namespace root/wmi -ClassName WmiMonitorBrightness |
+            Where-Object { $_.Active -and (($_.InstanceName -replace '_\d+$', '') -ieq $request.instance) })
+        if ($rows.Count -ne 1 -or [int]$rows[0].CurrentBrightness -ne [int]$desired) { throw 'Windows brightness write was not confirmed; no retry was sent.' }
+    }
+    @{current=[int]$rows[0].CurrentBrightness; minimum=[int]$levels[0]; maximum=[int]$levels[-1]; levels=$levels; changed=$changed} | ConvertTo-Json -Compress
+} catch {
+    @{error=$_.Exception.Message} | ConvertTo-Json -Compress
+}
+'''
+
+
+def windows_brightness(identity, percent=None):
+    executable = Path(os.environ.get('SystemRoot', r'C:\Windows')) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
+    result = subprocess.run([str(executable), '-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand',
+        base64.b64encode(WMI_SCRIPT.encode('utf-16-le')).decode('ascii')],
+        input=json.dumps({'instance': monitor_instance(identity), 'percent': percent}).encode('utf-8'),
+        capture_output=True, timeout=4, creationflags=subprocess.CREATE_NO_WINDOW)
+    if result.returncode or len(result.stdout) > 65536:
+        raise RuntimeError('Windows brightness worker failed or exceeded the output limit.')
+    reply = json.loads(result.stdout.decode('utf-8-sig'))
+    if 'error' in reply:
+        raise RuntimeError(reply['error'])
+    current, minimum, maximum = (reply.get(k) for k in ('current', 'minimum', 'maximum'))
+    levels = reply.get('levels')
+    if (any(type(v) is not int or not 0 <= v <= 100 for v in (current, minimum, maximum))
+            or not minimum <= current <= maximum or not isinstance(levels, list)
+            or not levels or any(type(v) is not int or not 0 <= v <= 100 for v in levels)
+            or current not in levels or minimum != min(levels) or maximum != max(levels)):
+        raise ValueError('Windows returned malformed brightness levels.')
+    return {**reply, 'percent': current}
+
+
+class WindowsBrightness:
+    def __init__(self, user=None, dxva=None):
+        self.user = user or C.WinDLL('user32', use_last_error=True)
+        self.dxva = dxva or C.WinDLL('dxva2', use_last_error=True)
+        self.callback = C.WINFUNCTYPE(I32, C.c_void_p, C.c_void_p, C.POINTER(Rect), C.c_ssize_t)
+        signatures = (
+            (self.user.EnumDisplayMonitors, [C.c_void_p, C.POINTER(Rect), self.callback, C.c_ssize_t]),
+            (self.user.GetMonitorInfoW, [C.c_void_p, C.POINTER(MonitorInfo)]),
+            (self.dxva.GetNumberOfPhysicalMonitorsFromHMONITOR, [C.c_void_p, C.POINTER(U32)]),
+            (self.dxva.GetPhysicalMonitorsFromHMONITOR, [C.c_void_p, U32, C.POINTER(PhysicalMonitor)]),
+            (self.dxva.DestroyPhysicalMonitors, [U32, C.POINTER(PhysicalMonitor)]),
+            (self.dxva.GetMonitorCapabilities, [C.c_void_p, C.POINTER(U32), C.POINTER(U32)]),
+            (self.dxva.GetMonitorBrightness, [C.c_void_p, C.POINTER(U32), C.POINTER(U32), C.POINTER(U32)]),
+            (self.dxva.SetMonitorBrightness, [C.c_void_p, U32]))
+        for function, arguments in signatures:
+            function.argtypes, function.restype = arguments, I32
+
+    @staticmethod
+    def check(success):
+        if not success:
+            raise C.WinError(C.get_last_error())
+
+    def transfer(self, device, percent=None):
+        monitors = []
+        callback = self.callback(lambda handle, dc, rect, data: monitors.append(handle) or 1)
+        self.check(self.user.EnumDisplayMonitors(None, None, callback, 0))
+        matches = []
+        for handle in monitors:
+            info = MonitorInfo()
+            info.size = C.sizeof(info)
+            self.check(self.user.GetMonitorInfoW(handle, C.byref(info)))
+            if info.device.casefold() == device.casefold():
+                matches.append(handle)
+        if len(matches) != 1:
+            raise InputIdentityError('The output must identify exactly one logical monitor.')
+        count = U32()
+        self.check(self.dxva.GetNumberOfPhysicalMonitorsFromHMONITOR(matches[0], C.byref(count)))
+        if count.value != 1:
+            raise InputIdentityError('The output must identify exactly one physical monitor.')
+        physical = (PhysicalMonitor * 1)()
+        self.check(self.dxva.GetPhysicalMonitorsFromHMONITOR(matches[0], 1, physical))
+        try:
+            caps, temperatures = U32(), U32()
+            self.check(self.dxva.GetMonitorCapabilities(physical[0].handle, C.byref(caps), C.byref(temperatures)))
+            if not caps.value & 2:
+                raise ValueError('The monitor does not report DDC/CI brightness support.')
+            minimum, current, maximum = U32(), U32(), U32()
+            self.check(self.dxva.GetMonitorBrightness(physical[0].handle, C.byref(minimum), C.byref(current), C.byref(maximum)))
+            if not minimum.value <= current.value <= maximum.value or maximum.value <= minimum.value:
+                raise ValueError('The monitor returned an invalid brightness range.')
+            desired = round(minimum.value + (maximum.value - minimum.value) * percent / 100) if percent is not None else current.value
+            changed = desired != current.value
+            if changed:
+                bounds = minimum.value, maximum.value
+                self.check(self.dxva.SetMonitorBrightness(physical[0].handle, desired))
+                self.check(self.dxva.GetMonitorBrightness(physical[0].handle, C.byref(minimum), C.byref(current), C.byref(maximum)))
+                if current.value != desired or (minimum.value, maximum.value) != bounds:
+                    raise RuntimeError('DDC/CI brightness write was not confirmed; no retry was sent.')
+            return {'minimum': minimum.value, 'maximum': maximum.value, 'current': current.value,
+                    'percent': round((current.value - minimum.value) * 100 / (maximum.value - minimum.value)),
+                    'levels': [], 'changed': changed}
+        finally:
+            self.check(self.dxva.DestroyPhysicalMonitors(1, physical))
+
+
+class NativeControls:
+    def __init__(self, display=None, color=None, ddc=None, windows=windows_brightness, clock=time.monotonic, sleep=time.sleep):
+        self.display = display or WindowsApi()
+        self.color = color or WindowsColorApi()
+        self.ddc = ddc
+        self.windows = windows
+        self.clock, self.sleep = clock, sleep
+
+    def endpoint(self, target=None):
+        paths = self.display.query(QDC_ONLY_ACTIVE_PATHS).paths
+        if len(paths) != 1 or not paths[0].flags & 1 or not paths[0].target.available:
+            raise InputIdentityError('Enable exactly one display output before using Other tools.')
+        path = paths[0]
+        identity = self.display.device_path(path)
+        if not identity or target and (key(path.target) != target['targetKey'] or identity != target['monitorDevicePath']):
+            raise InputIdentityError('Active display identity changed; no operation was repeated.')
+        return path, identity
+
+    def hdr_state(self, path):
+        try:
+            state = self.color.get(path)
+            if state.get('legacyAdvancedColor'):
+                return {'supported': False, 'enabled': None, 'error': 'Windows does not provide an unambiguous HDR state on this interface.'}
+            return {'supported': bool(state['supported']) and not state['limitedByPolicy'],
+                    'enabled': state['hdrActive'],
+                    'error': 'Windows policy prevents HDR control.' if state['limitedByPolicy'] else ''}
+        except (OSError, ValueError, RuntimeError) as error:
+            return {'supported': False, 'enabled': None, 'error': str(error)}
+
+    def brightness(self, path, identity, hdr, percent=None):
+        internal = path.target.technology in INTERNAL
+        result = {'supported': False, 'writable': False, 'method': 'windows' if internal else 'ddc',
+                  'minimum': None, 'maximum': None, 'current': None, 'percent': None, 'levels': [], 'error': ''}
+        if not internal and percent is not None:
+            hdr = self.hdr_state(path)
+        if not internal and hdr['enabled'] is not False:
+            result['error'] = 'External display brightness is disabled while HDR is on or its state is unavailable.'
+            if percent is not None:
+                raise ValueError(result['error'])
+            return result
+        try:
+            if internal:
+                values = self.windows(identity, percent)
+            else:
+                name = SourceName()
+                name.header = Header(1, C.sizeof(name), path.source.adapter, path.source.id)
+                WindowsApi.check(self.display.dll.DisplayConfigGetDeviceInfo(C.byref(name.header)))
+                self.endpoint({'targetKey': key(path.target), 'monitorDevicePath': identity})
+                values = (self.ddc or WindowsBrightness()).transfer(name.device, percent)
+            result.update({k: values[k] for k in ('minimum', 'maximum', 'current', 'percent', 'levels')})
+            result.update(supported=True, writable=True, changed=values.get('changed', False))
+        except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as error:
+            if percent is not None:
+                raise
+            result['error'] = str(error)
+        return result
+
+    def run(self, request):
+        command = request['command']
+        target = request if command != 'get_display_controls' else None
+        path, identity = self.endpoint(target)
+        name = TargetName()
+        name.header = Header(2, C.sizeof(name), path.target.adapter, path.target.id)
+        WindowsApi.check(self.display.dll.DisplayConfigGetDeviceInfo(C.byref(name.header)))
+        target = {'targetKey': key(path.target), 'monitorDevicePath': identity,
+                  'name': bytes(name.name).decode('utf-16-le').split('\0', 1)[0],
+                  'connection': {5: 'HDMI', 6: 'LVDS', 10: 'DisplayPort / USB-C', 11: 'eDP',
+                                 13: 'Embedded UDI', 0x80000000: 'Internal'}.get(path.target.technology, 'Other'),
+                  'internal': path.target.technology in INTERNAL}
+        hdr = self.hdr_state(path)
+        changed = False
+        if command == 'set_display_hdr':
+            if not hdr['supported'] or type(hdr['enabled']) is not bool:
+                raise ValueError(hdr['error'] or 'HDR control is unsupported.')
+            enabled = request['enabled']
+            if hdr['enabled'] != enabled:
+                self.endpoint(target)
+                state = self.color.get(path)
+                if state.get('legacyAdvancedColor') or not state.get('supported') or state.get('limitedByPolicy'):
+                    raise ValueError('Windows HDR support changed before writing; no command was sent.')
+                self.color.set(path, state, enabled)
+                changed = True
+                deadline = self.clock() + 5
+                while True:
+                    path, _ = self.endpoint(target)
+                    hdr = self.hdr_state(path)
+                    if hdr['enabled'] is enabled:
+                        break
+                    if self.clock() >= deadline:
+                        raise RuntimeError('HDR write was sent once but its state was not confirmed within five seconds.')
+                    self.sleep(.2)
+        if command == 'set_display_brightness':
+            self.endpoint(target)
+            brightness = self.brightness(path, identity, hdr, request['percent'])
+            changed = brightness.pop('changed', False)
+        else:
+            brightness = self.brightness(path, identity, hdr)
+            brightness.pop('changed', None)
+        path, _ = self.endpoint(target)
+        final_hdr = self.hdr_state(path)
+        self.endpoint(target)
+        if command == 'set_display_hdr' and final_hdr['enabled'] is not request['enabled']:
+            raise RuntimeError('HDR state changed during confirmation; no operation was repeated.')
+        if not target['internal'] and final_hdr['enabled'] is not False:
+            if command == 'set_display_brightness':
+                raise RuntimeError('HDR state changed during brightness confirmation; the result is unconfirmed and no write was repeated.')
+            brightness = self.brightness(path, identity, final_hdr)
+        elif not target['internal'] and final_hdr != hdr and not brightness['writable']:
+            brightness['error'] = 'HDR changed during the query. Refresh controls before adjusting brightness.'
+        controls = {'target': target, 'hdr': final_hdr, 'brightness': brightness}
+        return controls if command == 'get_display_controls' else {
+            'command': command, 'targetKey': target['targetKey'], 'monitorDevicePath': identity,
+            'changed': changed, 'displayControls': controls}
+
+
+def control_request(request):
+    result = subprocess.run([sys.executable, '-B', str(Path(__file__).resolve()), '--worker'],
+        input=json.dumps(request).encode('utf-8'), capture_output=True, timeout=10,
+        creationflags=subprocess.CREATE_NO_WINDOW)
+    if result.returncode or len(result.stdout) > 65536:
+        raise RuntimeError('Display-control worker failed; outcome may be unknown. No retry was sent.')
+    reply = json.loads(result.stdout.decode('utf-8'))
+    if reply.get('ok') is not True:
+        raise RuntimeError(reply.get('error', 'Display control failed.'))
+    return reply['result']
+
+
+if __name__ == '__main__':
+    if sys.argv[1:] != ['--worker']:
+        raise SystemExit('Only the fixed display-control worker entry point is supported.')
+    try:
+        request = json.loads(sys.stdin.buffer.read(16385))
+        reply = {'ok': True, 'result': NativeControls().run(request)}
+    except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as error:
+        reply = {'ok': False, 'error': str(error)}
+    print(json.dumps(reply, ensure_ascii=True))

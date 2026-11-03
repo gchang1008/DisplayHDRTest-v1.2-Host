@@ -45,7 +45,7 @@ def main():
             source.extractall(runtime)
         (runtime / 'python313._pth').write_text('python313.zip\n.\n..\n', encoding='ascii')
         files = ('displayhdr_api.py', 'displayhdr_server.py', 'displayhdr_supervisor.py', 'StartDisplayHDR.cmd',
-                 'displayhdr_ports.py', 'displayhdr_display_paths.py', 'displayhdr_hdr_control.py',
+                 'displayhdr_ports.py', 'displayhdr_display_paths.py', 'displayhdr_hdr_control.py', 'displayhdr_controls.py',
                  'displayhdr_monitor_input.py', 'displayhdr_window_presentation.py', 'displayhdr_edid.py', 'ConfigureHostFirewall.ps1')
         for name in files:
             shutil.copy2(repo / 'tools' / name, folder / name)
