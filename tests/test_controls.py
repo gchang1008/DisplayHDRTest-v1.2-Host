@@ -37,6 +37,30 @@ class Color:
 
 
 class ControlsTests(unittest.TestCase):
+    def test_query_only_uses_vcp_hint_after_fresh_endpoint_identity_match(self):
+        for hint, use in ((dict(self.target), True), ({**self.target, 'monitorDevicePath': 'other'}, False)):
+            with self.subTest(hint=hint):
+                self.native_ddc.transfer.reset_mock()
+                self.native.run({**self.request, '_brightnessVcp': hint})
+                args = (r'\\.\DISPLAY1', None, True) if use else (r'\\.\DISPLAY1', None)
+                self.native_ddc.transfer.assert_called_once_with(*args)
+
+    def test_only_known_vcp_read_format_errors_mark_readonly_method_hint_transient(self):
+        for code in (0xc0262589, 0xc026258a, 5):
+            with self.subTest(code=code):
+                self.native_ddc.transfer.side_effect = C.WinError(C.c_int32(code).value)
+                result = self.native.run({**self.request, '_brightnessVcp': dict(self.target)})
+                brightness = result['brightness']
+                self.assertFalse(brightness['writable'])
+                self.assertFalse(brightness['supported'])
+                self.assertIsNone(brightness['current'])
+                self.assertEqual(brightness.get('_vcpReadTransient', False), code in (0xc0262589, 0xc026258a))
+        self.native_ddc.transfer.reset_mock()
+        with self.assertRaises(OSError):
+            self.native.run({'command': 'set_display_brightness', **self.target, 'percent': 60,
+                             '_brightnessVcp': dict(self.target)})
+        self.native_ddc.transfer.assert_called_once()
+
     def test_control_trace_times_endpoint_hdr_and_windows_and_survives_read_error(self):
         self.internal()
         result = self.native.run(self.request)
@@ -445,7 +469,7 @@ class ServiceTests(unittest.TestCase):
         return {'version': 1, 'id': identifier, 'command': 'set_display_brightness', 'targetKey': target,
                 'monitorDevicePath': path, 'allowInterrupt': True, 'percent': 60}
 
-    def test_vcp_hint_is_host_private_identity_scoped_and_refresh_reprobes(self):
+    def test_vcp_hint_is_host_private_identity_scoped_and_refresh_reads_known_method(self):
         snapshot = self.vcp_result()
         self.runner.return_value = snapshot
         self.service.dispatch(self.request)
@@ -460,11 +484,11 @@ class ServiceTests(unittest.TestCase):
         self.assertNotIn('_brightnessVcp', self.runner.call_args.args[0])
         self.runner.return_value = snapshot
         self.service.dispatch({**self.request, 'id': 'refresh'})
-        self.assertNotIn('_brightnessVcp', self.runner.call_args.args[0])
+        self.assertEqual(self.runner.call_args.args[0]['_brightnessVcp'], {'targetKey': 'target', 'monitorDevicePath': 'path'})
         with self.assertRaises(ValueError):
             self.service.dispatch({**self.brightness_request('private'), '_brightnessVcp': True})
 
-    def test_failed_write_and_hdr_clear_vcp_hint_without_replay(self):
+    def test_failed_write_clears_but_successful_hdr_off_preserves_vcp_hint_without_replay(self):
         snapshot = self.vcp_result()
         self.runner.return_value = snapshot
         self.service.dispatch(self.request)
@@ -479,7 +503,52 @@ class ServiceTests(unittest.TestCase):
         self.runner.return_value = {'displayControls': snapshot}
         self.service.dispatch({'version': 1, 'id': 'hdr', 'command': 'set_display_hdr', 'targetKey': 'target',
                                'monitorDevicePath': 'path', 'allowInterrupt': True, 'enabled': False})
-        self.assertIsNone(self.service.brightness_vcp_target)
+        self.assertEqual(self.service.brightness_vcp_target, ('target', 'path'))
+
+    def test_hdr_on_and_off_and_refresh_keep_only_same_device_method_hint(self):
+        self.service.brightness_vcp_target = ('target', 'path')
+        on = self.vcp_result()
+        on['hdr']['enabled'] = True
+        on['brightness'] = {'supported': False, 'writable': False, 'current': None}
+        self.runner.return_value = {'displayControls': on}
+        request = {'version': 1, 'id': 'on', 'command': 'set_display_hdr', 'targetKey': 'target',
+                   'monitorDevicePath': 'path', 'allowInterrupt': True, 'enabled': True}
+        self.service.dispatch(request)
+        self.assertEqual(self.service.brightness_vcp_target, ('target', 'path'))
+        self.assertEqual(self.runner.call_args.args[0]['_brightnessVcp'], {'targetKey': 'target', 'monitorDevicePath': 'path'})
+        self.runner.return_value = {'displayControls': self.vcp_result()}
+        self.service.dispatch({**request, 'id': 'off', 'enabled': False})
+        self.assertEqual(self.service.brightness_vcp_target, ('target', 'path'))
+        self.runner.return_value = self.vcp_result()
+        self.service.dispatch({**self.request, 'id': 'refresh'})
+        self.assertIn('_brightnessVcp', self.runner.call_args.args[0])
+        self.assertEqual(self.service.brightness_vcp_target, ('target', 'path'))
+
+    def test_transient_read_retains_method_without_exposing_private_marker_or_writable(self):
+        self.service.brightness_vcp_target = ('target', 'path')
+        result = self.vcp_result()
+        result['brightness'] = {'supported': False, 'writable': False, 'current': None, '_vcpReadTransient': True}
+        self.runner.return_value = result
+        response = self.service.dispatch(self.request)
+        self.assertEqual(self.service.brightness_vcp_target, ('target', 'path'))
+        self.assertNotIn('_vcpReadTransient', response['brightness'])
+        self.assertFalse(response['brightness']['writable'])
+        self.assertIsNone(response['brightness']['current'])
+
+    def test_unknown_hdr_hard_read_failure_and_new_device_clear_old_method_hint(self):
+        for kind in ('unknown-hdr', 'read-failure', 'new-device'):
+            with self.subTest(kind=kind):
+                self.service.brightness_vcp_target = ('target', 'path')
+                result = self.vcp_result()
+                result['brightness'] = {'supported': False, 'writable': False, 'current': None}
+                if kind == 'unknown-hdr':
+                    result['hdr']['enabled'] = None
+                if kind == 'new-device':
+                    result['target']['monitorDevicePath'] = 'new-path'
+                    result['brightness']['_vcpReadTransient'] = True
+                self.runner.return_value = result
+                self.service.dispatch({**self.request, 'id': kind})
+                self.assertIsNone(self.service.brightness_vcp_target)
 
     def test_input_mutation_clears_vcp_hint_even_when_operation_fails(self):
         self.service.brightness_vcp_target = ('target', 'path')

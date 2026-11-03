@@ -280,17 +280,22 @@ class DisplayPortService:
             try:
                 identity = (request.get('targetKey'), request.get('monitorDevicePath'))
                 worker_request = dict(request)
-                if command == 'set_display_brightness' and identity == self.brightness_vcp_target:
-                    worker_request['_brightnessVcp'] = True
+                previous = self.brightness_vcp_target
+                if previous and (command == 'get_display_controls' or identity == previous):
+                    worker_request['_brightnessVcp'] = dict(zip(('targetKey', 'monitorDevicePath'), previous))
                 self.brightness_vcp_target = None
                 result = self.controls_runner(worker_request)
                 controls = result if command == 'get_display_controls' else result.get('displayControls', {})
                 brightness = controls.get('brightness', {})
                 target = controls.get('target', {})
-                if (command != 'set_display_hdr' and brightness.get('ddcMethod') == 'vcp'
-                        and brightness.get('writable') is True and not target.get('internal')
-                        and controls.get('hdr', {}).get('enabled') is False):
-                    self.brightness_vcp_target = (target.get('targetKey'), target.get('monitorDevicePath'))
+                transient = brightness.pop('_vcpReadTransient', False)
+                identity = (target.get('targetKey'), target.get('monitorDevicePath'))
+                hdr = controls.get('hdr', {}).get('enabled')
+                if not target.get('internal'):
+                    if hdr is False and brightness.get('ddcMethod') == 'vcp' and brightness.get('writable') is True:
+                        self.brightness_vcp_target = identity
+                    elif identity == previous and (hdr is True or hdr is False and transient):
+                        self.brightness_vcp_target = previous
                 self.replies[identifier] = (dict(request), result)
                 return result
             finally:

@@ -191,7 +191,9 @@ WMI 方法的回傳值依實際型別處理：布林 `True` 成功、`False` 失
 
 外接亮度的能力查詢或首次亮度讀取若回覆 `ERROR_GRAPHICS_MCA_INVALID_CAPABILITIES_STRING`（0xC0262587），可改用低階 `GetVCPFeatureAndVCPFeatureReply` 唯讀查詢亮度 VCP 0x10。能力查詢另接受 `0xC0262589`（DDC/CI command-field 錯誤）進入此唯讀備援；此新增條件不適用於後續亮度讀取或寫入失敗。只有設定型控制及有效的目前值／最大值才可用，以0至回覆最大值映射百分比；使用者明確調整時才單次 `SetVCPFeature`，並用同一路徑核對讀值及範圍。其他錯誤、明確不支援亮度或無效VCP回覆仍失敗，不以寫入測試能力；寫入開始後不再換路徑重送。HDR、裝置身分及逾時保護不變。[低階讀取](https://learn.microsoft.com/en-us/windows/win32/api/lowlevelmonitorconfigurationapi/nf-lowlevelmonitorconfigurationapi-getvcpfeatureandvcpfeaturereply)、[低階寫入](https://learn.microsoft.com/en-us/windows/win32/api/lowlevelmonitorconfigurationapi/nf-lowlevelmonitorconfigurationapi-setvcpfeature)、[Microsoft 亮度 VCP 說明](https://github.com/microsoft/PowerToys/blob/main/doc/devdocs/modules/powerdisplay/design.md)。
 
-`brightness.ddcMethod` 可回報 `high-level`／`vcp`／`windows`。每次 `get_display_controls` 都重新探測能力；成功確認同一 `targetKey`／`monitorDevicePath` 的外接 SDR 亮度需使用 VCP 時，Host 服務暫存該相容路徑，後續 Apply 省略已知失敗的能力查詢，仍重新讀取 VCP 0x10、寫入一次並讀回核對值與範圍。這是 Host 內部提示，不接受遠端指定；Refresh、HDR 操作、輸入／輸出配置操作、身分不符或控制失敗清除提示，失敗當次不改用其他介面重送。
+`brightness.ddcMethod` 可回報 `high-level`／`vcp`／`windows`。成功確認同一 `targetKey`／`monitorDevicePath` 的外接 SDR 亮度需使用 VCP 時，Host 服務只記住此讀取方式，不快取亮度值；後續 Refresh、HDR 切換及 Apply 可省略已知失敗的能力查詢。worker 每次先核對目前唯一啟用輸出與提示身分完全相同，才直接讀取 VCP 0x10，仍驗證控制類型、範圍、目前值及 HDR 狀態；寫入一次後仍讀回確認。這是 Host 內部提示，遠端 API 不接受指定。HDR 開啟時不查外接亮度，但保留同一裝置的方法提示；關閉後重新讀取真實值。
+
+已知 VCP 路徑的唯讀查詢回覆 `0xC0262589`／`0xC026258A`（command／length 格式錯誤）時，可保留同一裝置的方法提示供 Client 有限重查；回覆仍是亮度不可用、`writable:false`，不使用先前數值、不自動寫入。未知 HDR、輸入／輸出配置操作、身分改變、其他讀取失敗或任何寫入失敗會清除提示；失敗當次不改用其他介面重送。
 
 `displayControls` 另含 `controlElapsedMs`（包含 worker 的總毫秒數）與 `controlTrace`（最多64筆分段事件，`stage`、`result:ok/error/skipped`、`elapsedMs`，必要時 `reason`）。階段包含 endpoint／HDR 核對、外接能力查詢／首次讀取／寫入／確認，內建則以 `windows-brightness` 記錄 WMI 操作耗時。`worker` 是整個子程序的經過時間，與內部分段重疊，不應加總；能力查詢略過會明確記錄 skipped。控制失敗時，HTTP 錯誤的 `error` 物件也保留這兩個診斷欄位及原有 `requestMayHaveApplied`；worker 逾時只能提供整體耗時，不假造尚未回傳的內部分段。診斷不包含原始 EDID 或量測內容，由 Client 以原請求 id 保存。
 

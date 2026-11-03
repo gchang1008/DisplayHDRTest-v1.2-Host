@@ -256,11 +256,13 @@ class NativeControls:
             if percent is not None:
                 raise
             result['error'] = str(error)
+            if self.prefer_vcp and getattr(error, 'winerror', 0) & 0xffffffff in (0xc0262589, 0xc026258a):
+                result['_vcpReadTransient'] = True
         return result
 
     def run(self, request):
         self.trace = []
-        self.prefer_vcp = request.get('_brightnessVcp') is True
+        self.prefer_vcp = False
         started = time.perf_counter()
         result = self._run(request)
         controls = result if request['command'] == 'get_display_controls' else result['displayControls']
@@ -271,6 +273,9 @@ class NativeControls:
         command = request['command']
         target = request if command != 'get_display_controls' else None
         path, identity = self.endpoint(target)
+        hint = request.get('_brightnessVcp')
+        self.prefer_vcp = (isinstance(hint, dict) and hint.get('targetKey') == key(path.target)
+                           and hint.get('monitorDevicePath') == identity and path.target.technology not in INTERNAL)
         name = TargetName()
         name.header = Header(2, C.sizeof(name), path.target.adapter, path.target.id)
         WindowsApi.check(self.display.dll.DisplayConfigGetDeviceInfo(C.byref(name.header)))
