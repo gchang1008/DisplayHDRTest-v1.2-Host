@@ -151,6 +151,7 @@ class WindowsBrightness:
         try:
             caps, temperatures = U32(), U32()
             low_level = prefer_vcp
+            checking_capabilities = not prefer_vcp
             try:
                 if prefer_vcp:
                     self.trace.append({'stage': 'capability', 'result': 'skipped', 'elapsedMs': 0,
@@ -160,10 +161,12 @@ class WindowsBrightness:
                         physical[0].handle, C.byref(caps), C.byref(temperatures))))
                     if not caps.value & 2:
                         raise ValueError('The monitor does not report DDC/CI brightness support.')
+                checking_capabilities = False
                 minimum, current, maximum = measure(self.trace, 'initial-read', self.read_brightness,
                                                     physical[0].handle, low_level)
             except OSError as error:
-                if prefer_vcp or getattr(error, 'winerror', 0) & 0xffffffff != 0xc0262587:
+                allowed = (0xc0262587, 0xc0262589) if checking_capabilities else (0xc0262587,)
+                if prefer_vcp or getattr(error, 'winerror', 0) & 0xffffffff not in allowed:
                     raise
                 low_level = True
                 minimum, current, maximum = measure(self.trace, 'initial-read', self.read_brightness,

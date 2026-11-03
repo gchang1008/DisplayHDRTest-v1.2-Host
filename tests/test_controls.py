@@ -303,6 +303,44 @@ class DdcTests(unittest.TestCase):
         api.SetMonitorBrightness.assert_not_called()
         api.DestroyPhysicalMonitors.assert_called_once()
 
+    def test_invalid_command_field_can_read_valid_brightness_vcp_without_writing(self):
+        ddc, api, _ = self.make_vcp(error=0xc0262589)
+        result = ddc.transfer(r'\\.\DISPLAY1')
+        self.assertEqual(result['percent'], 50)
+        self.assertEqual(result['ddcMethod'], 'vcp')
+        api.GetVCPFeatureAndVCPFeatureReply.assert_called_once()
+        api.SetVCPFeature.assert_not_called()
+        api.SetMonitorBrightness.assert_not_called()
+
+    def test_invalid_command_field_fallback_failure_or_invalid_data_never_writes(self):
+        for outcome in ('read-error', 'invalid-type', 'invalid-range'):
+            ddc, api, state = self.make_vcp(error=0xc0262589)
+            if outcome == 'read-error':
+                api.GetVCPFeatureAndVCPFeatureReply.side_effect = OSError('VCP unavailable')
+            elif outcome == 'invalid-type':
+                state[2] = 0
+            else:
+                state[1] = 0
+            with self.subTest(outcome=outcome), self.assertRaises((OSError, ValueError)):
+                ddc.transfer(r'\\.\DISPLAY1', 70)
+            api.SetVCPFeature.assert_not_called()
+            api.SetMonitorBrightness.assert_not_called()
+            api.DestroyPhysicalMonitors.assert_called_once()
+
+    def test_invalid_command_field_during_high_level_read_or_write_does_not_add_fallback(self):
+        for operation in ('read', 'write'):
+            ddc, api = self.make()
+            error = C.WinError(C.c_int32(0xc0262589).value)
+            if operation == 'read':
+                api.GetMonitorBrightness.side_effect = error
+            else:
+                api.SetMonitorBrightness.side_effect = error
+            with self.subTest(operation=operation), self.assertRaises(OSError):
+                ddc.transfer(r'\\.\DISPLAY1', 70)
+            self.assertEqual(api.SetMonitorBrightness.call_count, int(operation == 'write'))
+            api.GetVCPFeatureAndVCPFeatureReply.assert_not_called()
+            api.SetVCPFeature.assert_not_called()
+
     def test_vcp_write_is_once_and_confirmed_using_same_method(self):
         ddc, api, _ = self.make_vcp()
         result = ddc.transfer(r'\\.\DISPLAY1', 70)
