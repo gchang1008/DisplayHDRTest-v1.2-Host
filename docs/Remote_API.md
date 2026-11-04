@@ -225,3 +225,5 @@ WMI 方法的回傳值依實際型別處理：布林 `True` 成功、`False` 失
 回覆在 `action` 中包含 `command`、`targetKey`、`monitorDevicePath`、`ok:true` 與 `currentValue`（1–255），並保留原生讀值資訊。原生查詢在獨立程序執行，上限3秒；讀取前後核對全部啟用路徑與所選裝置身分。共用同一 GDI source 的鏡像配置、非唯一實體螢幕、未啟用或已變動的身分、無法確認的來源皆拒絕，不猜測或重試。Windows 配置一致性及本機互斥保護仍保留。是否由讀值選取唯一輸出由 Client 決定；Host不自行串接恢復流程。
 
 上述亮度相容處理依標準 API 回覆判斷，不使用廠牌／型號例外清單；不同最大值依各自實際範圍映射百分比。VCP 失敗不再重複同一次探測，任何寫入開始後皆不轉換路徑或自動重送。新增 brightness-path 診斷階段記錄缺少高階亮度旗標後的探測原因；原 capability 錯誤與 VCP initial-read 結果仍保留。[Microsoft 錯誤碼](https://learn.microsoft.com/en-us/windows/win32/com/com-error-codes-5)。
+
+內建螢幕 WmiSetBrightness 明確回覆非零 ReturnValue 時仍回報錯誤；CIM 回覆未提供／為 null 時，不直接視為寫入失敗，仍立即重新查詢同一 active instance 並確認實際亮度等於目標。缺少回傳碼不代表成功，必須通過原有讀回／levels／身分驗證；不重送寫入、不新增固定等待。此處相容處理適用未完整提供回傳碼的 provider，並非修改 Windows 文件定義的零成功／非零失敗語意。[Microsoft WmiSetBrightness](https://learn.microsoft.com/en-us/windows/win32/wmicoreprov/wmisetbrightness-method-in-class-wmimonitorbrightnessmethods)。

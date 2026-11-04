@@ -55,7 +55,7 @@ try {
         $desired = $levels | Sort-Object @{Expression={ [Math]::Abs([int]$_ - [int]$request.percent) }}, @{Expression={ [int]$_ }} | Select-Object -First 1
         if ([int]$rows[0].CurrentBrightness -ne [int]$desired) {
             $reply = Invoke-CimMethod -InputObject $methods[0] -MethodName WmiSetBrightness -Arguments @{Timeout=[uint32]0; Brightness=[byte]$desired}
-            if ($reply.ReturnValue -ne 0) { throw "Windows brightness write returned error $($reply.ReturnValue)." }
+            if ($null -ne $reply.ReturnValue -and $reply.ReturnValue -ne 0) { throw "Windows brightness write returned error $($reply.ReturnValue)." }
             $changed = $true
         }
         $rows = @(Get-CimInstance -Namespace root/wmi -ClassName WmiMonitorBrightness |
