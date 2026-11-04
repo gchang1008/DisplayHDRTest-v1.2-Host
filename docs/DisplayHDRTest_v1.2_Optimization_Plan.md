@@ -19,7 +19,7 @@
 - automation-v0.1.8 已提供全部 47 個測試與 25 個持續設定的控制及查詢、HTTP 遠端按鍵、程序狀態及明確重啟。
 - 狀態 API 直接回報 HDR、亮度滑桿比例及視窗所在顯示器目前模式的整數 Hz；更新率取不到時為 null，不需切換至 Connection properties。
 - 關閉測試畫面後，啟動入口的 HTTP 服務仍運行，等待明確 restart_host 指令；不自動重啟。
-- 整合包輸出於本儲存庫 dist/DisplayHDR_Host_x64.zip。
+- 整合包輸出於本儲存庫 `dist/DisplayHDR_Host_x64_v版本號.zip`。
 
 以下有日期的實作與驗證段落保留當輪狀態、產物路徑與測試結果；現行操作及契約以 [Remote_API.md](Remote_API.md)、[Automation_API.md](Automation_API.md) 與 [Portable_Packages.md](Portable_Packages.md) 為準。
 

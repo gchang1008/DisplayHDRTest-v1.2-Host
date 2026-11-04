@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 import unittest
 from zipfile import ZipFile
+from package import HOST_VERSION
 
 
 class PortableTests(unittest.TestCase):
@@ -20,7 +21,7 @@ class PortableTests(unittest.TestCase):
         assert cls.stage.resolve().is_relative_to(cls.boundary)
         cls.roots = []
         for role in ("Host",):
-            with ZipFile(workspace / f"dist/DisplayHDR_{role}_x64.zip") as archive:
+            with ZipFile(workspace / f"dist/DisplayHDR_{role}_x64_v{HOST_VERSION}.zip") as archive:
                 assert archive.testzip() is None
                 archive.extractall(cls.stage)
             cls.roots.append(cls.stage / f"DisplayHDR_{role}_x64")

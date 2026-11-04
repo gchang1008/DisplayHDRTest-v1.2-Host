@@ -7,6 +7,7 @@ import shutil
 import tempfile
 import urllib.request
 from zipfile import ZipFile, ZIP_DEFLATED
+HOST_VERSION = '0.1.9'
 VERSION = '3.13.16'
 RUNTIME_URL = f'https://www.python.org/ftp/python/{VERSION}/python-{VERSION}-embed-amd64.zip'
 RUNTIME_SHA256 = '97dae5274cc54867065e8d5a3226e48c35017ed332a0fdb0e27d5b5821961297'
@@ -64,7 +65,7 @@ def main():
         (folder / 'Remote_API.md').write_text(remote_doc, encoding='utf-8')
         manifest = {'role': role, 'platform': 'Windows x64', 'pythonVersion': VERSION, 'runtimeSource': RUNTIME_URL, 'runtimeArchiveSha256': RUNTIME_SHA256, 'files': {str(p.relative_to(folder)).replace('\\', '/'): digest(p) for p in sorted(folder.rglob('*')) if p.is_file()}}
         (folder / 'manifest.json').write_text(json.dumps(manifest, indent=2), encoding='utf-8')
-        target = args.output / f'{folder.name}.zip'
+        target = args.output / f'{folder.name}_v{HOST_VERSION}.zip'
         with ZipFile(target, 'w', ZIP_DEFLATED) as output:
             for file in sorted(folder.rglob('*')):
                 if file.is_file():
