@@ -49,8 +49,10 @@ Host API 提供 `get_host_status` 查詢程序狀態，以及 `restart_host` 重
 
 ## 手動 Input Port 功能
 
-使用相容 Client 的 Input Port 配對／切換介面，先確認 DUT 開啟 Auto Switch 與 DDC/CI，並保留單一啟用的 Windows 輸出作為起點。逐一對照 OSD 保存輸入名稱，再使用配對值切換。Port 變更與 HDR 啟用後均重新啟動 DisplayHDR，完成後保留重啟後的畫面，以全螢幕、隱藏說明文字呈現，維持置頂及遮擋檢查，不另切換驗證圖樣；這是手動功能，不會自動啟動跨 Port 量測。
+使用相容 Client 的 Config Inputs 配對／切換介面，依提示逐一對照 DUT OSD 保存輸入名稱。配對時開啟 DUT 的 Auto Switch，Active 模式另需開啟 DDC/CI；配對完成後，Active 切換須關閉 Auto Switch，Passive 切換須保留 Auto Switch 開啟。配對可從多個啟用的 Windows 輸出開始，由 Client 明確選取唯一輸出，Host 執行本機操作並回報實際狀態。
 
-原生 DDC/CI 查詢、畫面遮擋與路徑控制模組已內附，不需安裝 ControlMyMonitor。功能依螢幕、驅動與線材支援程度而定；DDC/CI 讀不到時可在使用者明確選擇後改用人工確認，並在每次切換後對照 OSD 與畫面；不把 Windows 路徑切換成功當作來源已自動確認。人工模式仍保留單一路徑、裝置身分、HDR、重啟、置頂及遮擋檢查，無法自動偵測接線交換。此模式需同時更新 Host 與控制端。完整條件及 API 見 [Remote_API.md](Remote_API.md)。
+配對與切換只要求 Host 背景服務連線，DisplayHDR 測試程式停止時仍可操作，不會自動啟動測試程式。程式執行中時，必要的畫面準備、重啟、視窗呈現與等待由 Client 控制；Host 不自行串接流程。內建面板不適用 Input 配對／切換。跨 Input 量測需在 Client 的 Automation 另行開始，並確認 DisplayHDR 與 Windows HDR 已就緒。
 
-Input 操作狀態、請求 id 與診斷僅保存在記憶體，不建立狀態檔、鎖定檔或資料夾。服務重啟後不保存歷史操作，需重新讀取目前狀態。舊版 display-ports.json 與 display-port-session.lock 不會讀取、覆寫或清除。不建立跨次操作的原始桌面備份，也不提供 Restore；要返回之前來源，直接選擇該 Input。Host 重啟或切換失敗後先 Refresh inputs 重新核對目前路徑與 DDC/CI 來源，通過後即可再切換。舊版 pending-display-restore.json 保留但忽略，不會阻擋操作。移除還原功能需同時更新 Host 與 Client。
+原生 DDC/CI 查詢、畫面遮擋與路徑控制模組已內附，不需安裝 ControlMyMonitor。功能依螢幕、驅動與線材支援程度而定；DDC/CI 讀不到時依 Client 提示明確選擇人工確認，並在每次切換後對照 OSD 與畫面。人工確認仍須核對單一路徑及裝置身分，不能把 Windows 路徑切換成功當作 DUT 來源已自動確認，也無法自動偵測接線交換。上述功能需搭配相容 Host 與 Client。完整條件及 API 見 [Remote_API.md](Remote_API.md)。
+
+Input 操作狀態、請求 id 與診斷僅保存在記憶體，不建立狀態檔、鎖定檔或資料夾。服務重啟後不保存歷史操作，需重新讀取目前狀態。舊版 display-ports.json 與 display-port-session.lock 不會讀取、覆寫或清除。不建立跨次操作的原始桌面備份，也不提供 Restore；要返回之前來源，直接選擇該 Input。Host 重啟或切換失敗後，先等候 Client 刷新並重新核對目前路徑與來源，通過後即可再切換。舊版 pending-display-restore.json 保留但忽略，不會阻擋操作。移除還原功能需同時更新 Host 與 Client。
