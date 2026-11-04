@@ -16,6 +16,7 @@ from displayhdr_edid import monitor_instance
 
 COMMANDS = {"get_display_controls", "set_display_hdr", "set_display_brightness"}
 INTERNAL = {6, 11, 13, 0x80000000}
+MCCS_COMPATIBILITY_ERRORS = (0xc0262587, 0xc02625d9, 0xc02625da, 0xc02625db, 0xc02625dc)
 
 
 def measure(trace, stage, call, *args):
@@ -160,13 +161,15 @@ class WindowsBrightness:
                     measure(self.trace, 'capability', lambda: self.check(self.dxva.GetMonitorCapabilities(
                         physical[0].handle, C.byref(caps), C.byref(temperatures))))
                     if not caps.value & 2:
-                        raise ValueError('The monitor does not report DDC/CI brightness support.')
+                        low_level = True
+                        self.trace.append({'stage': 'brightness-path', 'result': 'skipped', 'elapsedMs': 0,
+                                           'reason': 'High-level brightness is not reported; probing VCP 0x10.'})
                 checking_capabilities = False
                 minimum, current, maximum = measure(self.trace, 'initial-read', self.read_brightness,
                                                     physical[0].handle, low_level)
             except OSError as error:
-                allowed = (0xc0262587, 0xc0262589) if checking_capabilities else (0xc0262587,)
-                if prefer_vcp or getattr(error, 'winerror', 0) & 0xffffffff not in allowed:
+                allowed = MCCS_COMPATIBILITY_ERRORS + (0xc0262589, 0xc026258a) if checking_capabilities else MCCS_COMPATIBILITY_ERRORS
+                if low_level or getattr(error, 'winerror', 0) & 0xffffffff not in allowed:
                     raise
                 low_level = True
                 minimum, current, maximum = measure(self.trace, 'initial-read', self.read_brightness,

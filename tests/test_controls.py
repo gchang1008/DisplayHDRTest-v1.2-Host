@@ -397,17 +397,71 @@ class DdcTests(unittest.TestCase):
             api.SetMonitorBrightness.assert_not_called()
             api.DestroyPhysicalMonitors.assert_called_once()
 
-    def test_other_capability_errors_and_explicit_unsupported_do_not_fallback(self):
+    def test_other_capability_errors_do_not_fallback(self):
         ddc, api, _ = self.make_vcp(error=5)
         with self.assertRaises(OSError):
             ddc.transfer(r'\\.\DISPLAY1', 70)
         api.GetVCPFeatureAndVCPFeatureReply.assert_not_called()
         api.SetVCPFeature.assert_not_called()
+
+    def test_mccs_declaration_errors_read_vcp_for_different_brightness_ranges(self):
+        for code in (0xc02625d9, 0xc02625da, 0xc02625db, 0xc02625dc, 0xc026258a):
+            for current, maximum in ((21, 100), (100, 200), (1000, 65535)):
+                with self.subTest(code=hex(code), maximum=maximum):
+                    ddc, api, state = self.make_vcp(error=code)
+                    state[:2] = current, maximum
+                    result = ddc.transfer(r'\\.\DISPLAY1')
+                    self.assertEqual(result['current'], current)
+                    self.assertEqual(result['maximum'], maximum)
+                    self.assertEqual(result['percent'], round(current * 100 / maximum))
+                    self.assertEqual(result['ddcMethod'], 'vcp')
+                    api.GetVCPFeatureAndVCPFeatureReply.assert_called_once()
+                    api.SetVCPFeature.assert_not_called()
+                    api.SetMonitorBrightness.assert_not_called()
+
+    def test_missing_high_level_brightness_flag_probes_vcp_but_never_replays_failed_read(self):
+        for fails in (False, True):
+            ddc, api, _ = self.make_vcp()
+            api.GetMonitorCapabilities.side_effect = lambda *args: 1
+            if fails:
+                api.GetVCPFeatureAndVCPFeatureReply.side_effect = C.WinError(C.c_int32(0xc0262587).value)
+            with self.subTest(fails=fails):
+                if fails:
+                    with self.assertRaises(OSError):
+                        ddc.transfer(r'\\.\DISPLAY1', 70)
+                else:
+                    self.assertEqual(ddc.transfer(r'\\.\DISPLAY1')['percent'], 50)
+                api.GetVCPFeatureAndVCPFeatureReply.assert_called_once()
+                api.GetMonitorBrightness.assert_not_called()
+                api.SetVCPFeature.assert_not_called()
+                api.SetMonitorBrightness.assert_not_called()
+
+    def test_mccs_fallback_rejects_unavailable_invalid_type_and_range_without_writing(self):
+        for state_values in (None, (21, 100, 0), (101, 100, 1), (0, 0, 1)):
+            ddc, api, state = self.make_vcp(error=0xc02625dc)
+            if state_values is None:
+                api.GetVCPFeatureAndVCPFeatureReply.side_effect = OSError('DDC/CI not responding')
+            else:
+                state[:] = state_values
+            with self.subTest(values=state_values), self.assertRaises((OSError, ValueError)):
+                ddc.transfer(r'\\.\DISPLAY1', 70)
+            api.GetVCPFeatureAndVCPFeatureReply.assert_called_once()
+            api.SetVCPFeature.assert_not_called()
+            api.SetMonitorBrightness.assert_not_called()
+
+    def test_mccs_initial_read_can_fallback_but_failed_writes_cannot(self):
+        ddc, api, _ = self.make_vcp()
+        api.GetMonitorCapabilities.side_effect = lambda handle, caps, temperatures: setattr(caps._obj, 'value', 2) or 1
+        api.GetMonitorBrightness.side_effect = C.WinError(C.c_int32(0xc02625dc).value)
+        self.assertEqual(ddc.transfer(r'\\.\DISPLAY1')['ddcMethod'], 'vcp')
+        api.SetVCPFeature.assert_not_called()
         ddc, api = self.make()
-        api.GetMonitorCapabilities.side_effect = None
-        with self.assertRaisesRegex(ValueError, 'does not report'):
+        api.SetMonitorBrightness.side_effect = C.WinError(C.c_int32(0xc02625dc).value)
+        with self.assertRaises(OSError):
             ddc.transfer(r'\\.\DISPLAY1', 70)
+        api.SetMonitorBrightness.assert_called_once()
         api.GetVCPFeatureAndVCPFeatureReply.assert_not_called()
+        api.SetVCPFeature.assert_not_called()
 
     def test_high_level_write_failure_does_not_start_vcp_fallback(self):
         ddc, api = self.make()

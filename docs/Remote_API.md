@@ -189,7 +189,7 @@ WMI 方法的回傳值依實際型別處理：布林 `True` 成功、`False` 失
 
 內建亮度使用 `WmiMonitorBrightness` 與 `WmiMonitorBrightnessMethods.WmiSetBrightness`，只操作與目前 monitorDevicePath 精確對應的 active WMI instance，套用最接近的支援 level，再讀回確認。外接亮度使用 `GetMonitorCapabilities` 的 MC_CAPS_BRIGHTNESS、`GetMonitorBrightness`／`SetMonitorBrightness`，邏輯及實體 monitor 都須唯一；0–100% 對應實際 min/max 範圍，單次寫入後核對實際值。外接輸出的 Windows HDR 開啟或狀態未知時，不讀寫 DDC/CI 亮度，顯示限制原因；內建依其 Windows 亮度能力處理。
 
-外接亮度的能力查詢或首次亮度讀取若回覆 `ERROR_GRAPHICS_MCA_INVALID_CAPABILITIES_STRING`（0xC0262587），可改用低階 `GetVCPFeatureAndVCPFeatureReply` 唯讀查詢亮度 VCP 0x10。能力查詢另接受 `0xC0262589`（DDC/CI command-field 錯誤）進入此唯讀備援；此新增條件不適用於後續亮度讀取或寫入失敗。只有設定型控制及有效的目前值／最大值才可用，以0至回覆最大值映射百分比；使用者明確調整時才單次 `SetVCPFeature`，並用同一路徑核對讀值及範圍。其他錯誤、明確不支援亮度或無效VCP回覆仍失敗，不以寫入測試能力；寫入開始後不再換路徑重送。HDR、裝置身分及逾時保護不變。[低階讀取](https://learn.microsoft.com/en-us/windows/win32/api/lowlevelmonitorconfigurationapi/nf-lowlevelmonitorconfigurationapi-getvcpfeatureandvcpfeaturereply)、[低階寫入](https://learn.microsoft.com/en-us/windows/win32/api/lowlevelmonitorconfigurationapi/nf-lowlevelmonitorconfigurationapi-setvcpfeature)、[Microsoft 亮度 VCP 說明](https://github.com/microsoft/PowerToys/blob/main/doc/devdocs/modules/powerdisplay/design.md)。
+外接亮度的能力查詢或首次亮度讀取若回覆 `ERROR_GRAPHICS_MCA_INVALID_CAPABILITIES_STRING`（0xC0262587），可改用低階 `GetVCPFeatureAndVCPFeatureReply` 唯讀查詢亮度 VCP 0x10。能力查詢另接受 `0xC0262589`／`0xC026258A`（DDC/CI command／length 錯誤）；能力查詢及首次高階亮度讀取遇 `0xC02625D9`–`0xC02625DC`（MCCS／VCP 版本或宣告不相容）也可進入唯讀 VCP 備援。能力查詢成功但缺少高階亮度旗標時，仍以 VCP 0x10 實際回覆判斷。權限／裝置身分等其他錯誤不放寬。只有設定型控制及有效的目前值／最大值才可用，以0至回覆最大值映射百分比；使用者明確調整時才單次 `SetVCPFeature`，並用同一路徑核對讀值及範圍。其他錯誤、VCP 不支援或無效回覆仍失敗，不以寫入測試能力；寫入開始後不再換路徑重送。HDR、裝置身分及逾時保護不變。[低階讀取](https://learn.microsoft.com/en-us/windows/win32/api/lowlevelmonitorconfigurationapi/nf-lowlevelmonitorconfigurationapi-getvcpfeatureandvcpfeaturereply)、[低階寫入](https://learn.microsoft.com/en-us/windows/win32/api/lowlevelmonitorconfigurationapi/nf-lowlevelmonitorconfigurationapi-setvcpfeature)、[Microsoft 亮度 VCP 說明](https://github.com/microsoft/PowerToys/blob/main/doc/devdocs/modules/powerdisplay/design.md)。
 
 `brightness.ddcMethod` 可回報 `high-level`／`vcp`／`windows`。成功確認同一 `targetKey`／`monitorDevicePath` 的外接 SDR 亮度需使用 VCP 時，Host 服務只記住此讀取方式，不快取亮度值；後續 Refresh、HDR 切換及 Apply 可省略已知失敗的能力查詢。worker 每次先核對目前唯一啟用輸出與提示身分完全相同，才直接讀取 VCP 0x10，仍驗證控制類型、範圍、目前值及 HDR 狀態；寫入一次後仍讀回確認。這是 Host 內部提示，遠端 API 不接受指定。HDR 開啟時不查外接亮度，但保留同一裝置的方法提示；關閉後重新讀取真實值。
 
@@ -223,3 +223,5 @@ WMI 方法的回傳值依實際型別處理：布林 `True` 成功、`False` 失
 ```
 
 回覆在 `action` 中包含 `command`、`targetKey`、`monitorDevicePath`、`ok:true` 與 `currentValue`（1–255），並保留原生讀值資訊。原生查詢在獨立程序執行，上限3秒；讀取前後核對全部啟用路徑與所選裝置身分。共用同一 GDI source 的鏡像配置、非唯一實體螢幕、未啟用或已變動的身分、無法確認的來源皆拒絕，不猜測或重試。Windows 配置一致性及本機互斥保護仍保留。是否由讀值選取唯一輸出由 Client 決定；Host不自行串接恢復流程。
+
+上述亮度相容處理依標準 API 回覆判斷，不使用廠牌／型號例外清單；不同最大值依各自實際範圍映射百分比。VCP 失敗不再重複同一次探測，任何寫入開始後皆不轉換路徑或自動重送。新增 brightness-path 診斷階段記錄缺少高階亮度旗標後的探測原因；原 capability 錯誤與 VCP initial-read 結果仍保留。[Microsoft 錯誤碼](https://learn.microsoft.com/en-us/windows/win32/com/com-error-codes-5)。
