@@ -235,7 +235,7 @@ WMI 方法的回傳值依實際型別處理：布林 `True` 成功、`False` 失
 
 ### 即時亮度係數
 
-`get_brightness_factor` 是單次唯讀查詢，只接受 `version:1`、非空 `id`、`command`、`targetKey`、`monitorDevicePath`，要求唯一啟用的 eDP（technology 11）且 Windows HDR 明確開啟。不需要 renderer 執行，不切換輸出／畫面、不重啟程式、不改 HDR 或亮度。回覆頂層 `brightnessFactor`：
+`get_brightness_factor` 是單次唯讀查詢，只接受 `version:1`、非空 `id`、`command`、`targetKey`、`monitorDevicePath`，要求唯一啟用的 eDP（technology 11）或 Windows 回報 Internal（technology 0x80000000）且 Windows HDR 明確開啟。不需要 renderer 執行，不切換輸出／畫面、不重啟程式、不改 HDR 或亮度。回覆頂層 `brightnessFactor`：
 
 - `target`：與上述 Other 控制相同的裝置身分。
 - `brightnessPercent`：取樣前後相同的 Windows 亮度百分比。
@@ -245,6 +245,8 @@ WMI 方法的回傳值依實際型別處理：布林 `True` 成功、`False` 失
 
 取樣前後查核唯一端點、身分、HDR 與亮度；有變動即拒絕。原生查詢共用獨立 display-control worker 的 10 秒總逾時，各 PowerShell 子查詢最多4秒；子步驟合計超過總界仍拒絕，不重試，不回傳舊 renderer 快取。Windows 必須提供 DisplayMonitor Windows Runtime API 與 DXGI Output6；缺少介面時回報不可用。
 
-`set_display_brightness` 可額外指定 `expectedHdr:true`，要求在寫入前重新確認同一 eDP 且 HDR 仍開啟，寫後再次確認；條件不符則拒絕或回報未確認，不自動重送。此旗標僅接受布林 true；未提供時維持一般手動 Apply 行為。亮度搜尋順序、停止／取消、等待與成功判定由 Client 管理，Host 不串接多次調整。
+`set_display_brightness` 可額外指定 `expectedHdr:true`，要求在寫入前重新確認同一 eDP 或 Internal 且 HDR 仍開啟，寫後再次確認；條件不符則拒絕或回報未確認，不自動重送。此旗標僅接受布林 true；未提供時維持一般手動 Apply 行為。亮度搜尋順序、停止／取消、等待與成功判定由 Client 管理，Host 不串接多次調整。
 
 原廠依據：[DisplayMonitor](https://learn.microsoft.com/en-us/uwp/api/windows.devices.display.displaymonitor)、[GetDesc1 動態色彩資訊更新](https://learn.microsoft.com/en-us/windows/win32/api/dxgi1_6/nf-dxgi1_6-idxgioutput6-getdesc1)。
+
+Windows 的 Internal 只表示內建連線，不保證其實體介面為 eDP；不得將其改標成 eDP。仍須通過同端點 WMI 亮度、HDR、即時 metadata 及前後身分／來源核對，無效來源不寫入。[Microsoft 輸出類型定義](https://learn.microsoft.com/en-us/windows/win32/api/wingdi/ne-wingdi-displayconfig_video_output_technology)。

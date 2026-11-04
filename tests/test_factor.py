@@ -16,6 +16,24 @@ import test_controls as fixtures
 
 
 class FactorTests(unittest.TestCase):
+    def test_windows_generic_internal_keeps_factor_and_write_guards(self):
+        query = self.fixture.controller.api.query
+        def internal(flags):
+            result = query(flags)
+            result.paths[0].target.technology = 0x80000000
+            return result
+        self.fixture.controller.api.query = internal
+        result = self.native.run(self.request)
+        self.assertEqual(result['target']['technology'], 0x80000000)
+        self.assertEqual(result['factor'], 1.01)
+        request = {'command': 'set_display_brightness', **self.fixture.target, 'percent': 60, 'expectedHdr': True}
+        self.native.run(request)
+        self.fixture.windows.reset_mock()
+        self.fixture.color.enabled = False
+        with self.assertRaisesRegex(ValueError, 'no write was sent'):
+            self.native.run(request)
+        self.fixture.windows.assert_not_called()
+
     def setUp(self):
         self.fixture = fixtures.ControlsTests()
         self.fixture.setUp()
