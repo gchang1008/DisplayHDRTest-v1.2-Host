@@ -192,6 +192,7 @@ class DisplayPortService:
             raise ValueError("A display endpoint and device identity are required.")
         if command == "write_display_input" and (type(request["value"]) is not int or not 1 <= request["value"] <= 255):
             raise ValueError("Invalid DDC/CI source value.")
+        readonly = command in ("get_display_edid", "read_display_input")
         with self.lock:
             identifier = request["id"]
             if identifier in self.replies:
@@ -203,7 +204,8 @@ class DisplayPortService:
                 raise ValueError("Request already attempted; no command was repeated.")
             if self.busy():
                 raise ValueError("A display operation is running.")
-            self.seen.add(identifier)
+            if not readonly:
+                self.seen.add(identifier)
             self.running = True
             try:
                 if command in ('set_display_output', 'write_display_input', 'enable_display_hdr'):
@@ -253,13 +255,15 @@ class DisplayPortService:
                 else:
                     result = self.window_factory().bring_front(self.renderer.pid(), keep_on_top=True)
                 result = {"command": command, "targetKey": target, "monitorDevicePath": identity, **result}
-                self.replies[identifier] = (dict(request), result)
+                if not readonly:
+                    self.replies[identifier] = (dict(request), result)
                 return result
             finally:
                 self.running = False
 
     def controls(self, request):
         command = request['command']
+        readonly = command == 'get_display_controls'
         expected = {'version', 'id', 'command'}
         if command != 'get_display_controls':
             expected |= {'allowInterrupt', 'targetKey', 'monitorDevicePath',
@@ -284,7 +288,8 @@ class DisplayPortService:
                 return result
             if identifier in self.seen or self.running:
                 raise ValueError('A display operation is running or this request was already attempted; no command was repeated.')
-            self.seen.add(identifier)
+            if not readonly:
+                self.seen.add(identifier)
             self.running = True
             try:
                 identity = (request.get('targetKey'), request.get('monitorDevicePath'))
@@ -305,7 +310,8 @@ class DisplayPortService:
                         self.brightness_vcp_target = identity
                     elif identity == previous and (hdr is True or hdr is False and transient):
                         self.brightness_vcp_target = previous
-                self.replies[identifier] = (dict(request), result)
+                if not readonly:
+                    self.replies[identifier] = (dict(request), result)
                 return result
             finally:
                 self.running = False

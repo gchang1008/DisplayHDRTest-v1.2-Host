@@ -165,7 +165,7 @@ class SupervisorTests(unittest.TestCase):
         try:
             self.assertEqual(post("get_host_status")[1]["host"]["status"], "ready")
             self.gate = threading.Event()
-            self.assertTrue(post("restart_host")[1]["ok"])
+            self.assertTrue(post("restart_host", id="restart-first")[1]["ok"])
             self.assertIn(post("get_host_status")[1]["host"]["status"], ("starting", "restarting"))
             self.assertEqual(post("get_state")[0], 503)
             self.assertEqual(post("restart_host")[0], 400)
@@ -174,20 +174,33 @@ class SupervisorTests(unittest.TestCase):
             self.gate.set()
             self.wait_ready()
             self.assertEqual(post("get_host_status")[1]["host"]["pid"], 101)
+            self.assertEqual(post("restart_host", id="restart-first")[0], 400)
+            self.assertEqual(len(self.processes), 2)
             self.window.bring_front.assert_not_called()
             post("get_host_status")
             post("get_host_status")
             self.window.bring_front.assert_not_called()
             self.window.bring_front.return_value = {"unobstructed": False}
-            self.assertTrue(post("restart_host")[1]["ok"])
+            self.assertTrue(post("restart_host", id="restart-second")[1]["ok"])
             self.wait_ready()
             self.window.bring_front.assert_not_called()
             self.assertIsNone(self.processes[-1].poll())
             self.assertEqual(self.closed, self.processes[:-1])
             self.window.bring_front.return_value = {"unobstructed": True}
-            self.assertTrue(post("restart_host")[1]["ok"])
+            self.assertTrue(post("restart_host", id="restart-third")[1]["ok"])
             self.wait_ready()
             self.window.bring_front.assert_not_called()
+            self.fail = True
+            self.assertTrue(post("restart_host", id="restart-failed")[1]["ok"])
+            self.wait_ready("failed")
+            self.fail = False
+            before = len(self.processes)
+            status, reply = post("restart_host", id="restart-failed")
+            self.assertEqual(status, 400)
+            self.assertIn("already attempted", reply["error"]["message"])
+            self.assertEqual(len(self.processes), before)
+            self.assertTrue(post("restart_host", id="restart-recovery")[1]["ok"])
+            self.wait_ready()
         finally:
             if self.gate:
                 self.gate.set()

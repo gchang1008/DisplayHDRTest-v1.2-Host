@@ -653,17 +653,43 @@ class ServiceTests(unittest.TestCase):
         self.assertFalse(self.service.busy())
 
     def test_duplicate_success_is_cached_but_failed_request_is_never_replayed(self):
-        self.service.dispatch(self.request)
-        self.service.dispatch(self.request)
+        request = self.brightness_request()
+        self.service.dispatch(request)
+        self.service.dispatch(request)
         self.runner.assert_called_once()
+        with self.assertRaisesRegex(ValueError, 'different operation'):
+            self.service.dispatch({**request, 'percent': 50})
+        with self.assertRaisesRegex(ValueError, 'different operation'):
+            self.service.dispatch({**self.request, 'id': request['id']})
         self.runner.side_effect = TimeoutError('unknown result')
-        self.request['id'] = 'failed'
+        request['id'] = 'failed'
         with self.assertRaises(TimeoutError):
-            self.service.dispatch(self.request)
+            self.service.dispatch(request)
         self.assertFalse(self.service.busy())
         with self.assertRaisesRegex(ValueError, 'already attempted'):
-            self.service.dispatch(self.request)
+            self.service.dispatch(request)
         self.assertEqual(self.runner.call_count, 2)
+
+    def test_queries_are_fresh_without_retaining_requests_or_replies(self):
+        self.runner.side_effect = lambda request: {'sample': self.runner.call_count}
+        for index in range(100):
+            result = self.service.dispatch({**self.request, 'id': f'read-{index}'})
+            self.assertEqual(result['sample'], index + 1)
+        first = self.service.dispatch(self.request)
+        second = self.service.dispatch(self.request)
+        self.assertEqual(second['sample'], first['sample'] + 1)
+        self.assertEqual(self.service.seen, set())
+        self.assertEqual(self.service.replies, {})
+
+    def test_failed_query_can_be_read_again_without_retaining_request(self):
+        self.runner.side_effect = TimeoutError('read failed')
+        for _ in range(2):
+            with self.assertRaises(TimeoutError):
+                self.service.dispatch(self.request)
+        self.assertEqual(self.runner.call_count, 2)
+        self.assertFalse(self.service.busy())
+        self.assertEqual(self.service.seen, set())
+        self.assertEqual(self.service.replies, {})
 
     def test_validation_and_busy_reject_before_worker(self):
         for extra in ({'allowInterrupt': True}, {'targetKey': 'target'}, {'version': True}):

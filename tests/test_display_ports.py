@@ -156,6 +156,47 @@ class PortTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.action("write_display_input", value=15)
 
+    def test_readonly_queries_are_fresh_without_retaining_requests_or_replies(self):
+        for command, attribute in (("get_display_edid", "edid_reader"),
+                                   ("read_display_input", "path_input_reader")):
+            with self.subTest(command=command):
+                reader = Mock(side_effect=lambda *args: {"ok": True, "currentValue": 26,
+                    "targetKey": "00000000:00000063/1", "monitorDevicePath": "monitor-1",
+                    "sample": reader.call_count})
+                setattr(self.service, attribute, reader)
+                request = {"version": 1, "id": "read", "command": command,
+                    "targetKey": "00000000:00000063/1", "monitorDevicePath": "monitor-1"}
+                for index in range(100):
+                    result = self.service.dispatch({**request, "id": f"read-{index}"})
+                    self.assertEqual(result["sample"], index + 1)
+                first = self.service.dispatch(request)
+                second = self.service.dispatch(request)
+                self.assertEqual(second["sample"], first["sample"] + 1)
+                self.assertEqual(self.service.seen, set())
+                self.assertEqual(self.service.replies, {})
+
+    def test_readonly_failure_can_be_read_again_but_cannot_reuse_a_write_id(self):
+        for command, attribute in (("get_display_edid", "edid_reader"),
+                                   ("read_display_input", "path_input_reader")):
+            with self.subTest(command=command):
+                reader = Mock(side_effect=TimeoutError("read failed"))
+                setattr(self.service, attribute, reader)
+                request = {"version": 1, "id": command, "command": command,
+                    "targetKey": "00000000:00000063/1", "monitorDevicePath": "monitor-1"}
+                for _ in range(2):
+                    with self.assertRaises(TimeoutError):
+                        self.service.dispatch(request)
+                self.assertEqual(reader.call_count, 2)
+                self.assertFalse(self.service.busy())
+                self.service.running = True
+                with self.assertRaisesRegex(ValueError, "running"):
+                    self.service.dispatch(request)
+                self.service.running = False
+                self.action("write_display_input", identifier=command, value=18)
+                with self.assertRaisesRegex(ValueError, "different operation"):
+                    self.service.dispatch(request)
+                self.assertEqual(reader.call_count, 2)
+
     def test_unknown_write_outcome_never_retried_or_followed_by_output_change(self):
         self.writer.side_effect = TimeoutError("unknown outcome")
         with self.assertRaises(TimeoutError):

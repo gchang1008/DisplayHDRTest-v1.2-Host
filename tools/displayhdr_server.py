@@ -140,6 +140,9 @@ class Handler(BaseHTTPRequestHandler):
                 if command == "restart_host":
                     if supervisor is None:
                         raise ValueError("Restart requires a managed Host launcher.")
+                    if identifier in self.server.restart_requests:
+                        raise ValueError("Restart request already attempted; no restart was repeated. Query get_host_status.")
+                    self.server.restart_requests.add(identifier)
                     supervisor.restart()
                 host = supervisor.status() if supervisor else {"status": "ready", "pid": self.server.pid,
                                                                 "restartSupported": False, "error": ""}
@@ -199,6 +202,7 @@ def create_server(host, port, pid, pipe_timeout=5, body_timeout=5):
     server.pipe_timeout = pipe_timeout
     server.body_timeout = body_timeout
     server.display_ports = None
+    server.restart_requests = set()
     return server
 
 
