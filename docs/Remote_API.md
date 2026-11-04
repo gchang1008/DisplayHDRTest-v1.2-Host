@@ -186,7 +186,7 @@ WMI 方法的回傳值依實際型別處理：布林 `True` 成功、`False` 失
 
 以下操作不需要 Input 配對，但都要求目前唯一啟用且身分可核對的輸出，不切換 Input、不修改 Windows 輸出配置、不控制圖樣或重啟 renderer。`get_display_controls` 是唯讀查詢，只接受 `version:1`、非空 `id`、`command`，回覆 `displayControls`：
 
-- `target`：`targetKey`、`monitorDevicePath`、`name`、`connection`、`internal`。內建識別依 Windows connector technology：LVDS、embedded DisplayPort、embedded UDI、Internal。
+- `target`：`targetKey`、`monitorDevicePath`、`name`、`connection`、`internal`、`technology`（Windows connector technology 整數，11 表示 eDP）。內建識別依 Windows connector technology：LVDS、embedded DisplayPort、embedded UDI、Internal。
 - `hdr`：`supported`、`enabled`（true／false／null）、`error`。狀態直接讀 Windows；舊 advanced-color 介面無法區分 HDR／WCG 時回覆 null 並停用此工具的 HDR 控制，不把 advanced color 當成 HDR。
 - `brightness`：`supported`、`writable`、`method`（`windows`／`ddc`）、`minimum`、`maximum`、`current`、`percent`、`levels`、`error`。不可用值為 null，層級為空陣列；值表示設定比例，不是實測 cd/m²。讀取能力失敗保留錯誤，不假造成功或亮度值。
 
@@ -232,3 +232,19 @@ WMI 方法的回傳值依實際型別處理：布林 `True` 成功、`False` 失
 上述亮度相容處理依標準 API 回覆判斷，不使用廠牌／型號例外清單；不同最大值依各自實際範圍映射百分比。VCP 失敗不再重複同一次探測，任何寫入開始後皆不轉換路徑或自動重送。新增 brightness-path 診斷階段記錄缺少高階亮度旗標後的探測原因；原 capability 錯誤與 VCP initial-read 結果仍保留。[Microsoft 錯誤碼](https://learn.microsoft.com/en-us/windows/win32/com/com-error-codes-5)。
 
 內建螢幕 WmiSetBrightness 明確回覆非零 ReturnValue 時仍回報錯誤；CIM 回覆未提供／為 null 時，不直接視為寫入失敗，仍立即重新查詢同一 active instance 並確認實際亮度等於目標。缺少回傳碼不代表成功，必須通過原有讀回／levels／身分驗證；不重送寫入、不新增固定等待。此處相容處理適用未完整提供回傳碼的 provider，並非修改 Windows 文件定義的零成功／非零失敗語意。[Microsoft WmiSetBrightness](https://learn.microsoft.com/en-us/windows/win32/wmicoreprov/wmisetbrightness-method-in-class-wmimonitorbrightnessmethods)。
+
+### 即時亮度係數
+
+`get_brightness_factor` 是單次唯讀查詢，只接受 `version:1`、非空 `id`、`command`、`targetKey`、`monitorDevicePath`，要求唯一啟用的 eDP（technology 11）且 Windows HDR 明確開啟。不需要 renderer 執行，不切換輸出／畫面、不重啟程式、不改 HDR 或亮度。回覆頂層 `brightnessFactor`：
+
+- `target`：與上述 Other 控制相同的裝置身分。
+- `brightnessPercent`：取樣前後相同的 Windows 亮度百分比。
+- `rawMaxLuminance`、`adjustedMaxLuminance`：分別由同一 monitor interface 的 `DisplayMonitor.MaxLuminanceInNits` 與全新 DXGI factory 下、同 source adapter LUID／GDI device 的 `IDXGIOutput6.GetDesc1().MaxLuminance` 取得；單位 nits，屬系統／裝置資訊，並非光學量測值。
+- `factor`：前兩者相除，沿用官方程式 float32 除法後轉為 JSON 數值的語意；必須有限且正值，來源無效時拒絕，不能以推估值代替。
+- `controlTrace`、`controlElapsedMs`：沿用既有有界診斷格式，包含亮度前後查核與 fresh-factor 階段。
+
+取樣前後查核唯一端點、身分、HDR 與亮度；有變動即拒絕。原生查詢共用獨立 display-control worker 的 10 秒總逾時，各 PowerShell 子查詢最多4秒；子步驟合計超過總界仍拒絕，不重試，不回傳舊 renderer 快取。Windows 必須提供 DisplayMonitor Windows Runtime API 與 DXGI Output6；缺少介面時回報不可用。
+
+`set_display_brightness` 可額外指定 `expectedHdr:true`，要求在寫入前重新確認同一 eDP 且 HDR 仍開啟，寫後再次確認；條件不符則拒絕或回報未確認，不自動重送。此旗標僅接受布林 true；未提供時維持一般手動 Apply 行為。亮度搜尋順序、停止／取消、等待與成功判定由 Client 管理，Host 不串接多次調整。
+
+原廠依據：[DisplayMonitor](https://learn.microsoft.com/en-us/uwp/api/windows.devices.display.displaymonitor)、[GetDesc1 動態色彩資訊更新](https://learn.microsoft.com/en-us/windows/win32/api/dxgi1_6/nf-dxgi1_6-idxgioutput6-getdesc1)。

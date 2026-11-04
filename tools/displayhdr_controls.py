@@ -12,9 +12,10 @@ from displayhdr_display_paths import Header, I32, U32, TargetName, WindowsApi, Q
 from displayhdr_hdr_control import WindowsColorApi
 from displayhdr_monitor_input import MonitorInfo, PhysicalMonitor, Rect, SourceName, InputIdentityError
 from displayhdr_edid import monitor_instance
+from displayhdr_factor import read_factor
 
 
-COMMANDS = {"get_display_controls", "set_display_hdr", "set_display_brightness"}
+COMMANDS = {"get_display_controls", "set_display_hdr", "set_display_brightness", "get_brightness_factor"}
 INTERNAL = {6, 11, 13, 0x80000000}
 MCCS_COMPATIBILITY_ERRORS = (0xc0262587, 0xc02625d9, 0xc02625da, 0xc02625db, 0xc02625dc)
 
@@ -196,11 +197,13 @@ class WindowsBrightness:
 
 
 class NativeControls:
-    def __init__(self, display=None, color=None, ddc=None, windows=windows_brightness, clock=time.monotonic, sleep=time.sleep):
+    def __init__(self, display=None, color=None, ddc=None, windows=windows_brightness, clock=time.monotonic, sleep=time.sleep,
+                 factor_reader=read_factor):
         self.display = display or WindowsApi()
         self.color = color or WindowsColorApi()
         self.ddc = ddc
         self.windows = windows
+        self.factor_reader = factor_reader
         self.clock, self.sleep = clock, sleep
         self.trace = []
         self.prefer_vcp = False
@@ -268,7 +271,7 @@ class NativeControls:
         self.prefer_vcp = False
         started = time.perf_counter()
         result = self._run(request)
-        controls = result if request['command'] == 'get_display_controls' else result['displayControls']
+        controls = result if request['command'] in ('get_display_controls', 'get_brightness_factor') else result['displayControls']
         controls.update(controlTrace=self.trace, controlElapsedMs=(time.perf_counter() - started) * 1000)
         return result
 
@@ -286,8 +289,24 @@ class NativeControls:
                   'name': bytes(name.name).decode('utf-16-le').split('\0', 1)[0],
                   'connection': {5: 'HDMI', 6: 'LVDS', 10: 'DisplayPort / USB-C', 11: 'eDP',
                                  13: 'Embedded UDI', 0x80000000: 'Internal'}.get(path.target.technology, 'Other'),
-                  'internal': path.target.technology in INTERNAL}
+                  'internal': path.target.technology in INTERNAL, 'technology': int(path.target.technology)}
         hdr = self.hdr_state(path)
+        if command == 'get_brightness_factor':
+            if path.target.technology != 11 or hdr['enabled'] is not True or not hdr['supported']:
+                raise ValueError('Brightness factor requires one eDP output with HDR enabled.')
+            source = (path.source.adapter.high, path.source.adapter.low, path.source.id)
+            before = measure(self.trace, 'brightness-before-factor', self.windows, identity)
+            values = measure(self.trace, 'fresh-factor', self.factor_reader, self.display, path, identity)
+            path, _ = self.endpoint(target)
+            after = measure(self.trace, 'brightness-after-factor', self.windows, identity)
+            path, _ = self.endpoint(target)
+            after_hdr = self.hdr_state(path)
+            path, _ = self.endpoint(target)
+            if (path.target.technology != 11 or after_hdr['enabled'] is not True or not after_hdr['supported']
+                    or source != (path.source.adapter.high, path.source.adapter.low, path.source.id)
+                    or before['percent'] != after['percent']):
+                raise ValueError('Brightness or HDR changed during factor sampling; refresh before adjusting.')
+            return {'target': target, 'brightnessPercent': after['percent'], **values}
         changed = False
         if command == 'set_display_hdr':
             if not hdr['supported'] or type(hdr['enabled']) is not bool:
@@ -311,6 +330,11 @@ class NativeControls:
                     self.sleep(.2)
         if command == 'set_display_brightness':
             self.endpoint(target)
+            if request.get('expectedHdr') is True:
+                path, _ = self.endpoint(target)
+                fresh_hdr = self.hdr_state(path)
+                if path.target.technology != 11 or fresh_hdr['enabled'] is not True or not fresh_hdr['supported']:
+                    raise ValueError('Auto adjustment requires the same eDP output with HDR still enabled; no write was sent.')
             brightness = self.brightness(path, identity, hdr, request['percent'])
             changed = brightness.pop('changed', False)
         else:
@@ -319,6 +343,8 @@ class NativeControls:
         path, _ = self.endpoint(target)
         final_hdr = self.hdr_state(path)
         self.endpoint(target)
+        if request.get('expectedHdr') is True and (path.target.technology != 11 or final_hdr['enabled'] is not True):
+            raise RuntimeError('HDR changed during brightness confirmation; the result is unconfirmed and no write was repeated.')
         if command == 'set_display_hdr' and final_hdr['enabled'] is not request['enabled']:
             raise RuntimeError('HDR state changed during confirmation; no operation was repeated.')
         if not target['internal'] and final_hdr['enabled'] is not False:
@@ -355,7 +381,7 @@ def control_request(request):
                       'reason': reply.get('error', 'Display control failed.')[:1024]})
         raise ControlError(reply.get('error', 'Display control failed.'), trace, elapsed)
     result = reply['result']
-    controls = result if request['command'] == 'get_display_controls' else result['displayControls']
+    controls = result if request['command'] in ('get_display_controls', 'get_brightness_factor') else result['displayControls']
     controls['controlElapsedMs'] = elapsed
     controls['controlTrace'].append({'stage': 'worker', 'result': 'ok', 'elapsedMs': elapsed})
     return result

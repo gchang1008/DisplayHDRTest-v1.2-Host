@@ -263,15 +263,22 @@ class DisplayPortService:
 
     def controls(self, request):
         command = request['command']
-        readonly = command == 'get_display_controls'
+        readonly = command in ('get_display_controls', 'get_brightness_factor')
         expected = {'version', 'id', 'command'}
-        if command != 'get_display_controls':
+        if command == 'get_brightness_factor':
+            expected |= {'targetKey', 'monitorDevicePath'}
+        elif command != 'get_display_controls':
             expected |= {'allowInterrupt', 'targetKey', 'monitorDevicePath',
                          'enabled' if command == 'set_display_hdr' else 'percent'}
+        if command == 'set_display_brightness' and 'expectedHdr' in request:
+            expected.add('expectedHdr')
         if (set(request) != expected or type(request.get('version')) is not int or request['version'] != 1
                 or not isinstance(request.get('id'), str) or not request['id']):
             raise ValueError('Unexpected or missing display-control fields.')
-        if command != 'get_display_controls':
+        if command == 'get_brightness_factor':
+            if not all(isinstance(request[k], str) and request[k] for k in ('targetKey', 'monitorDevicePath')):
+                raise ValueError('An explicit display identity is required for factor sampling.')
+        elif command != 'get_display_controls':
             if (request['allowInterrupt'] is not True or not all(isinstance(request[k], str) and request[k]
                     for k in ('targetKey', 'monitorDevicePath'))):
                 raise ValueError('Explicit allowInterrupt=true and a display identity are required.')
@@ -279,6 +286,8 @@ class DisplayPortService:
                 raise ValueError('HDR enabled must be boolean.')
             if command == 'set_display_brightness' and (type(request['percent']) is not int or not 0 <= request['percent'] <= 100):
                 raise ValueError('Brightness percent must be an integer from 0 to 100.')
+            if 'expectedHdr' in request and request['expectedHdr'] is not True:
+                raise ValueError('expectedHdr must be true when supplied.')
         with self.lock:
             identifier = request['id']
             if identifier in self.replies:
@@ -295,10 +304,13 @@ class DisplayPortService:
                 identity = (request.get('targetKey'), request.get('monitorDevicePath'))
                 worker_request = dict(request)
                 previous = self.brightness_vcp_target
-                if previous and (command == 'get_display_controls' or identity == previous):
+                if previous and command != 'get_brightness_factor' and (command == 'get_display_controls' or identity == previous):
                     worker_request['_brightnessVcp'] = dict(zip(('targetKey', 'monitorDevicePath'), previous))
                 self.brightness_vcp_target = None
                 result = self.controls_runner(worker_request)
+                if command == 'get_brightness_factor':
+                    self.brightness_vcp_target = previous
+                    return result
                 controls = result if command == 'get_display_controls' else result.get('displayControls', {})
                 brightness = controls.get('brightness', {})
                 target = controls.get('target', {})
