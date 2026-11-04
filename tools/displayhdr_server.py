@@ -129,7 +129,7 @@ class Handler(BaseHTTPRequestHandler):
                      else "brightnessFactor" if command == "get_brightness_factor" else "action"): ports})
                 return
             if command in ("prepare_display_test", "switch_display_port"):
-                raise ValueError("Update the Client; workflow control now belongs to the Client.")
+                raise ValueError("Use the individual operation APIs; workflow sequencing belongs to the caller.")
             if (self.server.display_ports is not None and self.server.display_ports.busy()
                     and command in ("set_state", "key", "restart_host")):
                 self.reply(409, failure(identifier, "display_port_busy", "A display-port operation is running; this command was not sent."))

@@ -374,7 +374,8 @@ class PortHttpTests(unittest.TestCase):
         thread = threading.Thread(target=instance.serve_forever, kwargs={"poll_interval": .01})
         thread.start()
         try:
-            for command, expected in (("get_display_port_status", 200), ("set_state", 409), ("restart_host", 409)):
+            for command, expected in (("get_display_port_status", 200), ("set_state", 409), ("restart_host", 409),
+                                      ("prepare_display_test", 400), ("switch_display_port", 400)):
                 connection = http.client.HTTPConnection("127.0.0.1", instance.server_port, timeout=2)
                 try:
                     body = json.dumps({"version": 1, "id": command, "command": command})
@@ -383,6 +384,9 @@ class PortHttpTests(unittest.TestCase):
                     self.assertEqual(response.status, expected)
                     result = json.loads(response.read())
                     self.assertEqual(result["ok"], expected == 200)
+                    if expected == 400:
+                        self.assertIn("individual operation APIs", result["error"]["message"])
+                        self.assertNotIn("Client", result["error"]["message"])
                 finally:
                     connection.close()
         finally:

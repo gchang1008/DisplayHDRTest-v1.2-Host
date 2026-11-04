@@ -176,9 +176,9 @@ Host 保留本機互斥、底層有界逾時與同一請求 id 不重複執行�
 
 WMI 方法的回傳值依實際型別處理：布林 `True` 成功、`False` 失敗；整數保留 `0` 成功、非零失敗的相容性。空值或字串不視為成功，每一區塊仍須包含128 bytes，再核對完整長度與checksum；不因回傳成功而略過資料驗證。
 
-缺少區塊、checksum 錯誤或無法讀取均回覆 `ok:true`，保留實際原始內容並列出原因，由呼叫端顯示警告及決定測試策略。身分不符、讀取期間輸出改變、欄位錯誤或本機操作忙碌仍拒絕。資料保存與跨 Input 排程由 Client 負責。
+缺少區塊、checksum 錯誤或無法讀取均回覆 `ok:true`，保留實際原始內容並列出原因，由呼叫端顯示警告及決定測試策略。身分不符、讀取期間輸出改變、欄位錯誤或本機操作忙碌仍拒絕。資料保存與跨 Input 排程由呼叫端負責。
 
-診斷欄位 `readElapsedMs` 是本次讀取含備援與檢查的總耗時（毫秒）；`readTrace` 是最多 260 筆、不含原始 EDID 內容的事件。每筆包含 `stage`（`wmi`／`registry`）、`result`（`read`／`end`／`error`／`timeout`／`limit`／`used`／`skipped`）及非負的 `elapsedMs`，依事件另含 `block`（0–256）、`byteLength`、`blockType`、`reason`（最多1024字元）。WMI 成功區塊的耗時由各次 CIM 呼叫計時；逾時／異常退出事件的耗時是整個 worker 經過時間。即使長度已符合宣告且沒有警告，也保留下一區塊的停止位置與原因；登錄備援是否使用、跳過或失敗亦記錄。診斷由 Client 與請求 id 關聯後保存；舊版 Host 未含這兩個欄位時，Client 可維持原有讀取功能。
+診斷欄位 `readElapsedMs` 是本次讀取含備援與檢查的總耗時（毫秒）；`readTrace` 是最多 260 筆、不含原始 EDID 內容的事件。每筆包含 `stage`（`wmi`／`registry`）、`result`（`read`／`end`／`error`／`timeout`／`limit`／`used`／`skipped`）及非負的 `elapsedMs`，依事件另含 `block`（0–256）、`byteLength`、`blockType`、`reason`（最多1024字元）。WMI 成功區塊的耗時由各次 CIM 呼叫計時；逾時／異常退出事件的耗時是整個 worker 經過時間。即使長度已符合宣告且沒有警告，也保留下一區塊的停止位置與原因；登錄備援是否使用、跳過或失敗亦記錄。診斷可由呼叫端與請求 id 關聯後保存；舊版 Host 未含這兩個欄位時，呼叫端可維持原有讀取功能。
 
 原廠依據：[WmiGetMonitorRawEEdidV1Block](https://learn.microsoft.com/en-us/windows/win32/wmicoreprov/wmigetmonitorraweedidv1block-wmimonitordescriptormethods)、[Windows EDID 格式與 override](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/overriding-monitor-edids)。
 
@@ -198,9 +198,9 @@ WMI 方法的回傳值依實際型別處理：布林 `True` 成功、`False` 失
 
 `brightness.ddcMethod` 可回報 `high-level`／`vcp`／`windows`。成功確認同一 `targetKey`／`monitorDevicePath` 的外接 SDR 亮度需使用 VCP 時，Host 服務只記住此讀取方式，不快取亮度值；後續 Refresh、HDR 切換及 Apply 可省略已知失敗的能力查詢。worker 每次先核對目前唯一啟用輸出與提示身分完全相同，才直接讀取 VCP 0x10，仍驗證控制類型、範圍、目前值及 HDR 狀態；寫入一次後仍讀回確認。這是 Host 內部提示，遠端 API 不接受指定。HDR 開啟時不查外接亮度，但保留同一裝置的方法提示；關閉後重新讀取真實值。
 
-已知 VCP 路徑的唯讀查詢回覆 `0xC0262589`／`0xC026258A`（command／length 格式錯誤）時，可保留同一裝置的方法提示供 Client 有限重查；回覆仍是亮度不可用、`writable:false`，不使用先前數值、不自動寫入。未知 HDR、輸入／輸出配置操作、身分改變、其他讀取失敗或任何寫入失敗會清除提示；失敗當次不改用其他介面重送。
+已知 VCP 路徑的唯讀查詢回覆 `0xC0262589`／`0xC026258A`（command／length 格式錯誤）時，可保留同一裝置的方法提示供呼叫端有限重查；回覆仍是亮度不可用、`writable:false`，不使用先前數值、不自動寫入。未知 HDR、輸入／輸出配置操作、身分改變、其他讀取失敗或任何寫入失敗會清除提示；失敗當次不改用其他介面重送。
 
-`displayControls` 另含 `controlElapsedMs`（包含 worker 的總毫秒數）與 `controlTrace`（最多64筆分段事件，`stage`、`result:ok/error/skipped`、`elapsedMs`，必要時 `reason`）。階段包含 endpoint／HDR 核對、外接能力查詢／首次讀取／寫入／確認，內建則以 `windows-brightness` 記錄 WMI 操作耗時。`worker` 是整個子程序的經過時間，與內部分段重疊，不應加總；能力查詢略過會明確記錄 skipped。控制失敗時，HTTP 錯誤的 `error` 物件也保留這兩個診斷欄位及原有 `requestMayHaveApplied`；worker 逾時只能提供整體耗時，不假造尚未回傳的內部分段。診斷不包含原始 EDID 或量測內容，由 Client 以原請求 id 保存。
+`displayControls` 另含 `controlElapsedMs`（包含 worker 的總毫秒數）與 `controlTrace`（最多64筆分段事件，`stage`、`result:ok/error/skipped`、`elapsedMs`，必要時 `reason`）。階段包含 endpoint／HDR 核對、外接能力查詢／首次讀取／寫入／確認，內建則以 `windows-brightness` 記錄 WMI 操作耗時。`worker` 是整個子程序的經過時間，與內部分段重疊，不應加總；能力查詢略過會明確記錄 skipped。控制失敗時，HTTP 錯誤的 `error` 物件也保留這兩個診斷欄位及原有 `requestMayHaveApplied`；worker 逾時只能提供整體耗時，不假造尚未回傳的內部分段。診斷不包含原始 EDID 或量測內容，可由呼叫端以原請求 id 保存。
 
 整個原生控制在固定參數子程序內執行，上限10秒；WMI worker另有4秒上限、HDR讀回最多5秒，逾時不重送。寫入前後核對 targetKey／monitorDevicePath，配置變化不回報成功。Host 保留本機互斥及請求防重複；呼叫端仍須在量測、配對、來源切換期間停用 Other 控制。舊 `enable_display_hdr` 的 Automation 行為與回覆契約不變。
 
@@ -227,7 +227,7 @@ WMI 方法的回傳值依實際型別處理：布林 `True` 成功、`False` 失
 {"version":1,"id":"path-read-1","command":"read_display_input","targetKey":"adapter/target","monitorDevicePath":"device path"}
 ```
 
-回覆在 `action` 中包含 `command`、`targetKey`、`monitorDevicePath`、`ok:true` 與 `currentValue`（1–255），並保留原生讀值資訊。原生查詢在獨立程序執行，上限3秒；讀取前後核對全部啟用路徑與所選裝置身分。共用同一 GDI source 的鏡像配置、非唯一實體螢幕、未啟用或已變動的身分、無法確認的來源皆拒絕，不猜測或重試。Windows 配置一致性及本機互斥保護仍保留。是否由讀值選取唯一輸出由 Client 決定；Host不自行串接恢復流程。
+回覆在 `action` 中包含 `command`、`targetKey`、`monitorDevicePath`、`ok:true` 與 `currentValue`（1–255），並保留原生讀值資訊。原生查詢在獨立程序執行，上限3秒；讀取前後核對全部啟用路徑與所選裝置身分。共用同一 GDI source 的鏡像配置、非唯一實體螢幕、未啟用或已變動的身分、無法確認的來源皆拒絕，不猜測或重試。Windows 配置一致性及本機互斥保護仍保留。是否由讀值選取唯一輸出由呼叫端決定；Host不自行串接恢復流程。
 
 上述亮度相容處理依標準 API 回覆判斷，不使用廠牌／型號例外清單；不同最大值依各自實際範圍映射百分比。VCP 失敗不再重複同一次探測，任何寫入開始後皆不轉換路徑或自動重送。新增 brightness-path 診斷階段記錄缺少高階亮度旗標後的探測原因；原 capability 錯誤與 VCP initial-read 結果仍保留。[Microsoft 錯誤碼](https://learn.microsoft.com/en-us/windows/win32/com/com-error-codes-5)。
 
@@ -245,7 +245,7 @@ WMI 方法的回傳值依實際型別處理：布林 `True` 成功、`False` 失
 
 取樣前後查核唯一端點、身分、HDR 與亮度；有變動即拒絕。原生查詢共用獨立 display-control worker 的 10 秒總逾時，各 PowerShell 子查詢最多4秒；子步驟合計超過總界仍拒絕，不重試，不回傳舊 renderer 快取。Windows 必須提供 DisplayMonitor Windows Runtime API 與 DXGI Output6；缺少介面時回報不可用。
 
-`set_display_brightness` 可額外指定 `expectedHdr:true`，要求在寫入前重新確認同一 eDP 或 Internal 且 HDR 仍開啟，寫後再次確認；條件不符則拒絕或回報未確認，不自動重送。此旗標僅接受布林 true；未提供時維持一般手動 Apply 行為。亮度搜尋順序、停止／取消、等待與成功判定由 Client 管理，Host 不串接多次調整。
+`set_display_brightness` 可額外指定 `expectedHdr:true`，要求在寫入前重新確認同一 eDP 或 Internal 且 HDR 仍開啟，寫後再次確認；條件不符則拒絕或回報未確認，不自動重送。此旗標僅接受布林 true；未提供時維持一般手動 Apply 行為。亮度搜尋順序、停止／取消、等待與成功判定由呼叫端管理，Host 不串接多次調整。
 
 原廠依據：[DisplayMonitor](https://learn.microsoft.com/en-us/uwp/api/windows.devices.display.displaymonitor)、[GetDesc1 動態色彩資訊更新](https://learn.microsoft.com/en-us/windows/win32/api/dxgi1_6/nf-dxgi1_6-idxgioutput6-getdesc1)。
 
