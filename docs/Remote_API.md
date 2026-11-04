@@ -134,7 +134,9 @@ HTTP 請求行與標頭的接收期限合計 5 秒，正文另有 5 秒接收期
 
 HTTP bridge 的 `POST /api` 提供獨立操作，不改動官方圖樣、計時或量測規則；DDC/CI使用Windows原生VCP 0x60，不需外部控制工具。`get_host_status` 回報 `displayPortControl: true`、`portPrimitives: true` 能力。
 
-`get_display_ports` 唯讀盤點端點、EDID雜湊、Windows唯一啟用輸出與當次DDC/CI值，回覆 `displayPorts`。端點包含 `targetKey`、`monitorDevicePath`、`name`、`connection`、`active`、`available`、`edidHash`；adapter LUID可能在重開機後改變，不能當永久識別。顯示器輸入名稱與數值的對應由呼叫端配對，不推定26必為USB-C。缺少可靠EDID、同型號裝置或交換線材時，仍可能需要人工核對。
+`get_display_ports` 唯讀盤點端點、EDID雜湊、Windows唯一啟用輸出與當次DDC/CI值，回覆 `displayPorts`。端點包含 `targetKey`、`monitorDevicePath`、`name`、`connection`、`internal`、`active`、`available`、`edidHash`；adapter LUID可能在重開機後改變，不能當永久識別。顯示器輸入名稱與數值的對應由呼叫端配對，不推定26必為USB-C。缺少可靠EDID、同型號裝置或交換線材時，仍可能需要人工核對。
+
+唯一啟用輸出為內建面板（`internal=true`，依 Windows LVDS、embedded DisplayPort、embedded UDI、Internal connector technology 判定）時，盤點不查詢 DDC/CI，`input.intentionallySkipped=true`；`supported`、`manualSupported`、`outputSelectionSupported` 均為 false，呼叫端應停用輸入配對與切換。盤點仍回傳端點資料，以便辨識裝置變更。
 
 `outputSelectionSupported` 表示目前有可驗證的啟用輸出、可用端點及相符的 Windows 已儲存配置，且 Host 可由啟動器管理；多輸出時也可為 true，僅允許先選定唯一輸出，不代表已可確認來源。`manualSupported` 仍只表示Windows單一路徑、儲存配置及可重啟Host符合操作條件，不表示DDC/CI可用或面板來源已確認。有效DDC回覆若不符合目前Windows裝置身分會回報錯誤；暫時無法讀取不代表可以猜測來源。Host不建立Input狀態檔或鎖定檔，不自動還原或復用舊備份；`pendingRestore` 固定false，只供格式相容。
 

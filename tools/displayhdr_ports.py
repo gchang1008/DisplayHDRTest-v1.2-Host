@@ -12,7 +12,7 @@ from displayhdr_hdr_control import HdrControl
 from displayhdr_monitor_input import InputIdentityError, probe_native, read_native, write_native
 from displayhdr_window_presentation import WindowPresentation
 from displayhdr_edid import read_edid
-from displayhdr_controls import COMMANDS as CONTROL_COMMANDS, control_request
+from displayhdr_controls import COMMANDS as CONTROL_COMMANDS, INTERNAL, control_request
 
 
 COMMANDS = {"get_display_ports", "get_display_port_status", "set_display_output",
@@ -126,14 +126,23 @@ class DisplayPortService:
                 targets[target_key] = {"targetKey": target_key, "monitorDevicePath": identity,
                     "name": bytes(name.name).decode("utf-16-le").split("\0", 1)[0],
                     "connection": {5: "HDMI", 10: "DisplayPort / USB-C"}.get(path.target.technology, "Other"),
+                    "internal": path.target.technology in INTERNAL,
                     "active": target_key in active_keys, "available": True, "edidHash": edid_hash(identity)}
-            reading = self.read_input() if len(active_keys) == 1 else {"ok": False, "error": "Enable exactly one display before calibration.", "currentValue": None}
+            internal = (len(active_keys) == 1 and
+                        targets.get(next(iter(active_keys)), {}).get("internal") is True)
+            internal_error = "Input switching is not applicable to an internal display."
+            if internal:
+                reading = {"ok": False, "currentValue": None, "intentionallySkipped": True, "error": internal_error}
+            else:
+                reading = self.read_input() if len(active_keys) == 1 else {"ok": False, "error": "Enable exactly one display before calibration.", "currentValue": None}
             configuration = controller.inspect()
-            selection_supported = (self.renderer.restart_supported() and bool(active_keys)
+            selection_supported = (not internal and self.renderer.restart_supported() and bool(active_keys)
                                    and active_keys.issubset(targets) and bool(configuration.get("matchesDatabase"))
                                    and all(t["monitorDevicePath"] for t in targets.values()))
             error = ""
-            if not self.renderer.restart_supported():
+            if internal:
+                error = internal_error
+            elif not self.renderer.restart_supported():
                 error = "Port switching requires a managed Host launcher."
             elif not targets or len(active_keys) != 1 or not active_keys.issubset(targets):
                 error = "Enable exactly one connected display before matching or switching."

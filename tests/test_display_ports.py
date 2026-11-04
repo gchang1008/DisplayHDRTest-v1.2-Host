@@ -185,6 +185,46 @@ class PortTests(unittest.TestCase):
         self.assertEqual(result["controlOwner"], "client")
         self.assertTrue(result["manualSupported"])
 
+    def test_internal_inventory_skips_ddc_and_disables_input_capabilities(self):
+        query = self.controller.query
+        for technology in (6, 11, 13, 0x80000000):
+            for mode in ("pair", "active", "passive"):
+                with self.subTest(technology=technology, mode=mode):
+                    def internal_query(flags):
+                        result = query(flags)
+                        for path in result.paths:
+                            if path.target.id == 1:
+                                path.target.technology = technology
+                        return result
+                    with patch.object(self.controller.api, "query", side_effect=internal_query):
+                        result = self.service.inventory(mode)
+                    active = next(t for t in result["targets"] if t["active"])
+                    self.assertTrue(active["internal"])
+                    for name in ("supported", "manualSupported", "outputSelectionSupported"):
+                        self.assertFalse(result[name])
+                    self.assertTrue(result["input"]["intentionallySkipped"])
+                    self.assertIn("internal display", result["error"])
+                    self.input.assert_not_called()
+                    self.writer.assert_not_called()
+                    self.assertEqual(self.controller.trials, [])
+                    self.assertEqual(self.renderer.restart_count, 0)
+
+    def test_external_inventory_recovers_after_internal_display(self):
+        query = self.controller.api.query
+        def internal_query(flags):
+            result = query(flags)
+            for path in result.paths:
+                path.target.technology = 11
+            return result
+        with patch.object(self.controller.api, "query", side_effect=internal_query):
+            self.assertFalse(self.service.inventory("active")["supported"])
+        result = self.service.inventory("active")
+        self.input.assert_called_once()
+        self.assertTrue(result["supported"])
+        self.assertTrue(result["manualSupported"])
+        self.assertTrue(result["outputSelectionSupported"])
+        self.assertTrue(all(t["internal"] is False for t in result["targets"]))
+
     def test_legacy_workflow_is_not_available(self):
         for command in ("switch_display_port", "prepare_display_test"):
             with self.assertRaises(ValueError):
