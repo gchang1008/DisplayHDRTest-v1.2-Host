@@ -7,7 +7,7 @@ import shutil
 import tempfile
 import urllib.request
 from zipfile import ZipFile, ZIP_DEFLATED
-HOST_VERSION = '0.1.9'
+HOST_VERSION = '0.1.10'
 VERSION = '3.13.16'
 RUNTIME_URL = f'https://www.python.org/ftp/python/{VERSION}/python-{VERSION}-embed-amd64.zip'
 RUNTIME_SHA256 = '97dae5274cc54867065e8d5a3226e48c35017ed332a0fdb0e27d5b5821961297'
