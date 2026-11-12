@@ -279,6 +279,7 @@ class NativeControls:
             available, kind = measure(self.trace, 'legacy-hdr', self.legacy_hdr_reader, self.display, path)
             enabled = kind == 2
             if kind == 1 or enabled != state['enabled']:
+                enabled = None
                 error = error or 'Legacy HDR control requires a confirmed HDR or standard SDR mode.'
             supported = supported and available
         return state, {'supported': bool(supported) and not error, 'enabled': enabled, 'error': error}

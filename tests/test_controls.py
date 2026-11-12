@@ -161,6 +161,7 @@ class ControlsTests(unittest.TestCase):
         self.legacy_hdr.side_effect = lambda *_: (True, 2 if self.color.enabled else 0)
         result = self.native.run(self.request)
         self.assertEqual(result['hdr'], {'supported': True, 'enabled': False, 'error': ''})
+        self.assertTrue(result['brightness']['writable'])
         for enabled in (True, False):
             result = self.native.run({'command': 'set_display_hdr', **self.target, 'enabled': enabled})
             self.assertTrue(result['changed'])
@@ -180,6 +181,30 @@ class ControlsTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     self.native.run({'command': 'set_display_hdr', **self.target, 'enabled': True})
         self.assertEqual(self.color.writes, [])
+
+    def test_legacy_hdr_ambiguous_modes_block_external_brightness(self):
+        self.color.legacy = True
+        self.legacy_hdr.side_effect = None
+        for kind, advanced_color in ((0, True), (2, False), (1, True)):
+            with self.subTest(kind=kind, advanced_color=advanced_color):
+                self.legacy_hdr.return_value = (True, kind)
+                self.color.enabled = advanced_color
+                result = self.native.run(self.request)
+                self.assertIsNone(result['hdr']['enabled'])
+                self.assertFalse(result['brightness']['writable'])
+                with self.assertRaisesRegex(ValueError, 'HDR'):
+                    self.native.run({'command': 'set_display_brightness', **self.target, 'percent': 40})
+        self.native_ddc.transfer.assert_not_called()
+
+    def test_legacy_hdr_sdr_readback_alone_does_not_confirm_hdr_off(self):
+        self.color.legacy = True
+        self.color.enabled = True
+        self.color.confirm = False
+        self.legacy_hdr.side_effect = lambda *_: (True, 0 if self.color.writes else 2)
+        with self.assertRaisesRegex(RuntimeError, 'not confirmed'):
+            self.native.run({'command': 'set_display_hdr', **self.target, 'enabled': False})
+        self.assertEqual(self.color.writes, [False])
+        self.native_ddc.transfer.assert_not_called()
 
     def test_legacy_hdr_shared_flag_alone_does_not_confirm_write(self):
         self.color.legacy = True
