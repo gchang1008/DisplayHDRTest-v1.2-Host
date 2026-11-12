@@ -12,7 +12,7 @@ from displayhdr_display_paths import Header, I32, U32, TargetName, WindowsApi, Q
 from displayhdr_hdr_control import WindowsColorApi
 from displayhdr_monitor_input import MonitorInfo, PhysicalMonitor, Rect, SourceName, InputIdentityError
 from displayhdr_edid import monitor_instance
-from displayhdr_factor import read_factor
+from displayhdr_factor import dxgi_output, guid, method, read_factor, release
 
 
 COMMANDS = {"get_display_controls", "set_display_hdr", "set_display_brightness", "get_brightness_factor"}
@@ -38,6 +38,54 @@ class ControlError(RuntimeError):
     def __init__(self, message, trace, elapsed):
         super().__init__(message)
         self.controlTrace, self.controlElapsedMs = trace, elapsed
+
+
+def legacy_hdr_info(display, path):
+    source = SourceName()
+    source.header = Header(1, C.sizeof(source), path.source.adapter, path.source.id)
+    WindowsApi.check(display.dll.DisplayConfigGetDeviceInfo(C.byref(source.header)))
+    output = dxgi_output((path.source.adapter.high, path.source.adapter.low), source.device)
+    if not output.monitor:
+        raise ValueError('The active output did not identify a Windows monitor for HDR.')
+
+    runtime = C.WinDLL('combase')
+    pointer = C.c_void_p
+    out_pointer = C.POINTER(pointer)
+    for function, args in ((runtime.RoInitialize, [U32]),
+                           (runtime.WindowsCreateString, [C.c_wchar_p, U32, out_pointer]),
+                           (runtime.WindowsDeleteString, [pointer]),
+                           (runtime.RoGetActivationFactory, [pointer, pointer, out_pointer])):
+        function.argtypes, function.restype = args, I32
+    runtime.RoUninitialize.argtypes, runtime.RoUninitialize.restype = [], None
+
+    def check(result):
+        if result < 0:
+            raise OSError(f'Windows HDR capability query failed: 0x{result & 0xffffffff:08X}.')
+
+    name = 'Windows.Graphics.Display.DisplayInformation'
+    string, factory, monitor, info = pointer(), pointer(), pointer(), pointer()
+    check(runtime.RoInitialize(1))
+    try:
+        check(runtime.WindowsCreateString(name, len(name), C.byref(string)))
+        check(runtime.RoGetActivationFactory(string, guid('7449121c-382b-4705-8da7-a795ba482013'),
+                                             C.byref(factory)))
+        # GetForMonitor returns IDisplayInformation5, which exposes GetAdvancedColorInfo.
+        check(method(factory, 7, [pointer, pointer, out_pointer], output.monitor,
+                     guid('3a5442dc-2cde-4a8d-80d1-21dc5adcc1aa'), C.byref(monitor)))
+        check(method(monitor, 6, [out_pointer], C.byref(info)))
+        kind, available = I32(), C.c_ubyte()
+        check(method(info, 6, [C.POINTER(I32)], C.byref(kind)))
+        check(method(info, 16, [I32, C.POINTER(C.c_ubyte)], 2, C.byref(available)))
+        if kind.value not in (0, 1, 2):
+            raise ValueError('Windows reported an unknown advanced color mode.')
+        return bool(available.value), kind.value
+    finally:
+        release(info)
+        release(monitor)
+        release(factory)
+        if string:
+            runtime.WindowsDeleteString(string)
+        runtime.RoUninitialize()
 
 
 WMI_SCRIPT = r'''
@@ -199,12 +247,13 @@ class WindowsBrightness:
 
 class NativeControls:
     def __init__(self, display=None, color=None, ddc=None, windows=windows_brightness, clock=time.monotonic, sleep=time.sleep,
-                 factor_reader=read_factor):
+                 factor_reader=read_factor, legacy_hdr_reader=legacy_hdr_info):
         self.display = display or WindowsApi()
         self.color = color or WindowsColorApi()
         self.ddc = ddc
         self.windows = windows
         self.factor_reader = factor_reader
+        self.legacy_hdr_reader = legacy_hdr_reader
         self.clock, self.sleep = clock, sleep
         self.trace = []
         self.prefer_vcp = False
@@ -222,14 +271,21 @@ class NativeControls:
             raise InputIdentityError('Active display identity changed; no operation was repeated.')
         return path, identity
 
+    def read_hdr(self, path):
+        state = measure(self.trace, 'hdr', self.color.get, path)
+        supported, enabled = state['supported'], state['hdrActive']
+        error = 'Windows policy prevents HDR control.' if state['limitedByPolicy'] else ''
+        if state.get('legacyAdvancedColor'):
+            available, kind = measure(self.trace, 'legacy-hdr', self.legacy_hdr_reader, self.display, path)
+            enabled = kind == 2
+            if kind == 1 or enabled != state['enabled']:
+                error = error or 'Legacy HDR control requires a confirmed HDR or standard SDR mode.'
+            supported = supported and available
+        return state, {'supported': bool(supported) and not error, 'enabled': enabled, 'error': error}
+
     def hdr_state(self, path):
         try:
-            state = measure(self.trace, 'hdr', self.color.get, path)
-            if state.get('legacyAdvancedColor'):
-                return {'supported': False, 'enabled': None, 'error': 'Windows does not provide an unambiguous HDR state on this interface.'}
-            return {'supported': bool(state['supported']) and not state['limitedByPolicy'],
-                    'enabled': state['hdrActive'],
-                    'error': 'Windows policy prevents HDR control.' if state['limitedByPolicy'] else ''}
+            return self.read_hdr(path)[1]
         except (OSError, ValueError, RuntimeError) as error:
             return {'supported': False, 'enabled': None, 'error': str(error)}
 
@@ -314,10 +370,11 @@ class NativeControls:
                 raise ValueError(hdr['error'] or 'HDR control is unsupported.')
             enabled = request['enabled']
             if hdr['enabled'] != enabled:
-                self.endpoint(target)
-                state = self.color.get(path)
-                if state.get('legacyAdvancedColor') or not state.get('supported') or state.get('limitedByPolicy'):
+                path, _ = self.endpoint(target)
+                state, before = self.read_hdr(path)
+                if not before['supported'] or before['enabled'] != hdr['enabled']:
                     raise ValueError('Windows HDR support changed before writing; no command was sent.')
+                path, _ = self.endpoint(target)
                 self.color.set(path, state, enabled)
                 changed = True
                 deadline = self.clock() + 5

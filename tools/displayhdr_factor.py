@@ -49,7 +49,7 @@ def release(pointer):
         method(pointer, 2, [])
 
 
-def dxgi_luminance(adapter_luid, device):
+def dxgi_output(adapter_luid, device):
     """Use a new factory and exactly one adapter/output match on every call."""
     factory = C.c_void_p()
     dll = C.WinDLL('dxgi')
@@ -84,9 +84,9 @@ def dxgi_luminance(adapter_luid, device):
                                      guid('068346e8-aaec-4b84-add7-137f513f77a1'), C.byref(output6)))
                         desc = OutputDesc()
                         check(method(output6, 27, [C.POINTER(OutputDesc)], C.byref(desc)))
-                        if not desc.attached or desc.device.casefold() != device.casefold() or desc.colorSpace != 12:
-                            raise ValueError('Fresh DXGI output identity or HDR10 color space changed.')
-                        matches.append(float(desc.maximum))
+                        if not desc.attached or desc.device.casefold() != device.casefold():
+                            raise ValueError('Fresh DXGI output identity changed.')
+                        matches.append(desc)
                     finally:
                         release(output6)
                         release(output)
@@ -101,6 +101,13 @@ def dxgi_luminance(adapter_luid, device):
     if len(matches) != 1:
         raise ValueError('A unique fresh DXGI output matching the active endpoint was not found.')
     return matches[0]
+
+
+def dxgi_luminance(adapter_luid, device):
+    desc = dxgi_output(adapter_luid, device)
+    if desc.colorSpace != 12:
+        raise ValueError('Fresh DXGI output identity or HDR10 color space changed.')
+    return float(desc.maximum)
 
 
 RAW_SCRIPT = r'''

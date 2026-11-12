@@ -83,8 +83,9 @@ class ControlsTests(unittest.TestCase):
         self.windows = Mock(return_value={'minimum': 0, 'maximum': 100, 'current': 60,
                                          'percent': 60, 'levels': [0, 20, 40, 60, 80, 100], 'changed': False})
         self.clock = 0
+        self.legacy_hdr = Mock(side_effect=OSError('Windows HDR capability query unavailable.'))
         self.native = controls.NativeControls(self.controller.api, self.color, self.native_ddc,
-            self.windows, clock=lambda: self.clock, sleep=self.sleep)
+            self.windows, clock=lambda: self.clock, sleep=self.sleep, legacy_hdr_reader=self.legacy_hdr)
         self.request = {'command': 'get_display_controls'}
         self.target = {'targetKey': '00000000:00000063/1', 'monitorDevicePath': 'monitor-1'}
 
@@ -153,6 +154,40 @@ class ControlsTests(unittest.TestCase):
             self.assertEqual(result['changed'], changed)
             self.assertIs(result['displayControls']['hdr']['enabled'], enabled)
         self.assertEqual(self.color.writes, [True, False])
+        self.legacy_hdr.assert_not_called()
+
+    def test_legacy_hdr_on_off_requires_independent_readback(self):
+        self.color.legacy = True
+        self.legacy_hdr.side_effect = lambda *_: (True, 2 if self.color.enabled else 0)
+        result = self.native.run(self.request)
+        self.assertEqual(result['hdr'], {'supported': True, 'enabled': False, 'error': ''})
+        for enabled in (True, False):
+            result = self.native.run({'command': 'set_display_hdr', **self.target, 'enabled': enabled})
+            self.assertTrue(result['changed'])
+            self.assertIs(result['displayControls']['hdr']['enabled'], enabled)
+            self.assertIn('legacy-hdr', {row['stage'] for row in result['displayControls']['controlTrace']})
+        self.assertEqual(self.color.writes, [True, False])
+
+    def test_legacy_hdr_rejects_missing_capability_wcg_or_disagreement(self):
+        self.color.legacy = True
+        for report, advanced_color in (((False, 0), False), ((True, 1), True), ((True, 0), True)):
+            with self.subTest(report=report, advanced_color=advanced_color):
+                self.legacy_hdr.side_effect = None
+                self.legacy_hdr.return_value = report
+                self.color.enabled = advanced_color
+                result = self.native.run(self.request)
+                self.assertFalse(result['hdr']['supported'])
+                with self.assertRaises(ValueError):
+                    self.native.run({'command': 'set_display_hdr', **self.target, 'enabled': True})
+        self.assertEqual(self.color.writes, [])
+
+    def test_legacy_hdr_shared_flag_alone_does_not_confirm_write(self):
+        self.color.legacy = True
+        self.legacy_hdr.side_effect = None
+        self.legacy_hdr.return_value = (True, 0)
+        with self.assertRaisesRegex(RuntimeError, 'not confirmed'):
+            self.native.run({'command': 'set_display_hdr', **self.target, 'enabled': True})
+        self.assertEqual(self.color.writes, [True])
 
     def test_hdr_unconfirmed_raises_after_single_write(self):
         self.color.confirm = False
