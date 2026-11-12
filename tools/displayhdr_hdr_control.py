@@ -96,7 +96,10 @@ class HdrControl:
         self.color.enable(self._path(target_key, monitor_device_path), before)
         deadline = time.monotonic() + 5
         for attempt in range(26):
-            after = self.state(target_key, monitor_device_path)
+            try:
+                after = self.state(target_key, monitor_device_path)
+            except ValueError as error:
+                raise RuntimeError(f'HDR enable was sent once, but confirmation failed: {error}') from error
             if after['enabled']:
                 return {'before': before, 'after': after, 'changed': True,
                         'requiresHostHdrVerification': True}

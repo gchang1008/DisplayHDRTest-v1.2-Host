@@ -345,6 +345,42 @@ class PathSelectionTests(unittest.TestCase):
 
 
 class PortHttpTests(unittest.TestCase):
+    def test_hdr_identity_change_distinguishes_before_and_after_write_without_replay(self):
+        for after_write in (False, True):
+            with self.subTest(after_write=after_write):
+                controller, color = Controller(), Mock()
+
+                def state(path):
+                    if not after_write:
+                        controller.current = 2
+                    return {"supported": True, "limitedByPolicy": False, "enabled": False}
+
+                color.get.side_effect = state
+                color.enable.side_effect = lambda *_: setattr(controller, "current", 2)
+                instance = server.create_server("127.0.0.1", 0, 123)
+                instance.display_ports = ports.DisplayPortService(Renderer(),
+                    controller_factory=lambda: controller, hdr_factory=lambda: ports.HdrControl(controller.api, color))
+                worker = threading.Thread(target=instance.serve_forever, kwargs={"poll_interval": .01})
+                worker.start()
+                try:
+                    body = json.dumps({"version": 1, "id": "hdr-once", "command": "enable_display_hdr",
+                        "targetKey": "00000000:00000063/1", "monitorDevicePath": "monitor-1", "allowInterrupt": True})
+                    for attempt in range(2):
+                        connection = http.client.HTTPConnection("127.0.0.1", instance.server_port, timeout=2)
+                        try:
+                            connection.request("POST", "/api", body, {"Content-Type": "application/json"})
+                            response = connection.getresponse()
+                            uncertain = after_write and attempt == 0
+                            self.assertEqual(response.status, 409 if uncertain else 400)
+                            error = json.loads(response.read())["error"]
+                            self.assertEqual(error["requestMayHaveApplied"], uncertain)
+                            self.assertIn("active display endpoint" if attempt == 0 else "already attempted", error["message"])
+                            self.assertEqual(color.enable.call_count, int(after_write))
+                        finally:
+                            connection.close()
+                finally:
+                    instance.shutdown(); instance.server_close(); worker.join(2)
+
     def test_native_timeout_reports_unknown_outcome_without_repeating(self):
         instance = server.create_server("127.0.0.1", 0, 123)
         service = Mock()
