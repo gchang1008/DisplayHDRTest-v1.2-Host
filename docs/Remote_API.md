@@ -131,6 +131,8 @@ HTTP 請求行與標頭的接收期限合計 5 秒，正文另有 5 秒接收期
 - 本功能需要支援 `restart_host` 的 Host 整合包。
 
 查詢程序狀態時，使用 `get_host_status`；重新啟動測試程式時，使用 `restart_host`。
+
+Host 狀態回覆中的 `host.hostVersion` 是正在執行的 Host 套件版本，與封裝 manifest 的 `hostVersion` 一致。回覆最外層的 `version` 是 API 協定版本。
 ## 本機顯示操作 API
 
 HTTP bridge 的 `POST /api` 提供獨立操作，不改動官方圖樣、計時或量測規則；DDC/CI使用Windows原生VCP 0x60，不需外部控制工具。`get_host_status` 回報 `displayPortControl: true`、`portPrimitives: true` 能力。
@@ -161,6 +163,8 @@ Host 保留本機互斥、底層有界逾時與同一請求 id 不重複執行�
 防重複紀錄只保留變更操作；唯讀 `get_display_controls`、`get_display_edid`、`read_display_input` 每次重新讀取，不累積請求或回覆快取。唯讀請求仍不可借用既有變更操作的 id。
 
 ### EDID 原始資料查詢
+
+單一內建面板的 EDID 可在目前路徑與 Windows 儲存設定不同時讀取。外接輸出仍須通過設定一致性檢查。
 
 `get_display_edid` 是唯讀查詢，只接受 `version:1`、非空 `id`、`command`、`targetKey`、`monitorDevicePath`，不接受 `allowInterrupt`。指定身分須符合目前唯一啟用的 Windows 輸出，讀取前後均核對；不改顯示配置、HDR、視窗或 DDC/CI 來源。
 

@@ -12,6 +12,7 @@ from unittest.mock import Mock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from displayhdr_supervisor import Supervisor
 from displayhdr_server import create_server
+from displayhdr_version import HOST_VERSION
 
 
 class Process:
@@ -163,7 +164,10 @@ class SupervisorTests(unittest.TestCase):
             return result
 
         try:
-            self.assertEqual(post("get_host_status")[1]["host"]["status"], "ready")
+            status = post("get_host_status")[1]
+            self.assertEqual(status["version"], 1)
+            self.assertEqual(status["host"]["hostVersion"], HOST_VERSION)
+            self.assertEqual(status["host"]["status"], "ready")
             self.gate = threading.Event()
             self.assertTrue(post("restart_host", id="restart-first")[1]["ok"])
             self.assertIn(post("get_host_status")[1]["host"]["status"], ("starting", "restarting"))

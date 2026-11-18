@@ -12,6 +12,7 @@ import threading
 from displayhdr_api import DisplayHDRClient
 from displayhdr_supervisor import Supervisor
 from displayhdr_ports import COMMANDS as PORT_COMMANDS, DisplayPortService, Renderer
+from displayhdr_version import HOST_VERSION
 
 
 MUTATION_COMMANDS = {"set_state", "key"} | (PORT_COMMANDS - {"get_display_ports", "get_display_port_status", "get_display_edid", "read_display_input", "get_display_controls", "get_brightness_factor"})
@@ -149,6 +150,7 @@ class Handler(BaseHTTPRequestHandler):
                                                                 "restartSupported": False, "error": ""}
                 host["displayPortControl"] = True
                 host["portPrimitives"] = True
+                host["hostVersion"] = HOST_VERSION
                 self.reply(200, {"version": 1, "id": identifier, "ok": True, "host": host})
                 return
             if self.server.supervisor is not None:

@@ -7,7 +7,7 @@ import shutil
 import tempfile
 import urllib.request
 from zipfile import ZipFile, ZIP_DEFLATED
-HOST_VERSION = '0.1.10'
+from displayhdr_version import HOST_VERSION
 VERSION = '3.13.16'
 RUNTIME_URL = f'https://www.python.org/ftp/python/{VERSION}/python-{VERSION}-embed-amd64.zip'
 RUNTIME_SHA256 = '97dae5274cc54867065e8d5a3226e48c35017ed332a0fdb0e27d5b5821961297'
@@ -45,7 +45,7 @@ def main():
         with ZipFile(archive) as source:
             source.extractall(runtime)
         (runtime / 'python313._pth').write_text('python313.zip\n.\n..\n', encoding='ascii')
-        files = ('displayhdr_api.py', 'displayhdr_server.py', 'displayhdr_supervisor.py', 'StartDisplayHDR.cmd',
+        files = ('displayhdr_api.py', 'displayhdr_server.py', 'displayhdr_supervisor.py', 'displayhdr_version.py', 'StartDisplayHDR.cmd',
                  'displayhdr_ports.py', 'displayhdr_display_paths.py', 'displayhdr_hdr_control.py', 'displayhdr_controls.py', 'displayhdr_factor.py',
                  'displayhdr_monitor_input.py', 'displayhdr_window_presentation.py', 'displayhdr_edid.py', 'ConfigureHostFirewall.ps1')
         for name in files:
@@ -64,6 +64,7 @@ def main():
         remote_doc = (repo / 'docs/Remote_API.md').read_text(encoding='utf-8').replace('(Portable_Packages.md)', '(README.md)')
         (folder / 'Remote_API.md').write_text(remote_doc, encoding='utf-8')
         manifest = {'role': role, 'platform': 'Windows x64', 'pythonVersion': VERSION, 'runtimeSource': RUNTIME_URL, 'runtimeArchiveSha256': RUNTIME_SHA256, 'files': {str(p.relative_to(folder)).replace('\\', '/'): digest(p) for p in sorted(folder.rglob('*')) if p.is_file()}}
+        manifest['hostVersion'] = HOST_VERSION
         (folder / 'manifest.json').write_text(json.dumps(manifest, indent=2), encoding='utf-8')
         target = args.output / f'{folder.name}_v{HOST_VERSION}.zip'
         with ZipFile(target, 'w', ZIP_DEFLATED) as output:

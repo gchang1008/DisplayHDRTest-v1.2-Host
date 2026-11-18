@@ -215,7 +215,10 @@ class DisplayPortService:
                 controller = self.controller_factory()
                 current = controller.inspect()
                 active = current["active"]["paths"]
-                if not active or not current.get("matchesDatabase"):
+                # A read of the live internal panel does not depend on its saved display mode.
+                internal_edid = (command == "get_display_edid" and len(active) == 1
+                                 and active[0].get("outputTechnology") in INTERNAL)
+                if not active or (not internal_edid and not current.get("matchesDatabase")):
                     raise ValueError("Active output and matching Windows configuration are required.")
                 if command not in ("set_display_output", "read_display_input") and len(active) != 1:
                     raise ValueError("Exactly one active output is required for this operation.")
