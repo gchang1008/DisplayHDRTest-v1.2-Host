@@ -164,8 +164,6 @@ Host 保留本機互斥、底層有界逾時與同一請求 id 不重複執行�
 
 ### EDID 原始資料查詢
 
-單一內建面板的 EDID 可在目前路徑與 Windows 儲存設定不同時讀取。外接輸出仍須通過設定一致性檢查。
-
 `get_display_edid` 是唯讀查詢，只接受 `version:1`、非空 `id`、`command`、`targetKey`、`monitorDevicePath`，不接受 `allowInterrupt`。指定身分須符合目前唯一啟用的 Windows 輸出，讀取前後均核對；不改顯示配置、HDR、視窗或 DDC/CI 來源。
 
 ```json

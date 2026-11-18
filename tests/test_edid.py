@@ -478,29 +478,6 @@ class EdidServiceTests(unittest.TestCase):
             self.service.dispatch(self.request)
         self.assertFalse(self.service.busy())
 
-    def test_only_internal_panel_edid_can_read_when_saved_configuration_differs(self):
-        row = self.controller.row()
-        for technology in (11, 0x80000000):
-            with self.subTest(technology=technology), patch.object(self.controller, 'inspect',
-                    return_value={'active': {'paths': [{**row, 'outputTechnology': technology}]},
-                                  'matchesDatabase': False}):
-                result = self.service.dispatch(self.request)
-                self.assertTrue(result['complete'])
-                self.assertTrue(result['checksumsValid'])
-                self.assertEqual(result['byteLength'], 384)
-                with self.assertRaisesRegex(ValueError, 'matching Windows configuration'):
-                    self.service.dispatch({**self.request, 'command': 'enable_display_hdr',
-                                           'allowInterrupt': True, 'id': f'hdr-{technology}'})
-        self.hdr.assert_not_called()
-
-    def test_external_edid_still_requires_matching_configuration(self):
-        with patch.object(self.controller, 'inspect', return_value={
-                'active': {'paths': [{**self.controller.row(), 'outputTechnology': 10}]},
-                'matchesDatabase': False}):
-            with self.assertRaisesRegex(ValueError, 'matching Windows configuration'):
-                self.service.dispatch(self.request)
-        self.reader.assert_not_called()
-
     def test_http_uses_edid_envelope_and_is_not_a_mutation(self):
         instance = server.create_server('127.0.0.1', 0, 123)
         instance.display_ports = self.service
