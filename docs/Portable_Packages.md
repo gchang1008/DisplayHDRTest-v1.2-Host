@@ -27,7 +27,7 @@ IP 以 Host 實際位址為準；同機呼叫 API 可使用 127.0.0.1。關閉 D
 
 遠端控制方式見 [Remote_API.md](Remote_API.md)，測試與設定清單見 [Automation_API.md](Automation_API.md)。
 
-開發端從 Host 原始碼執行 tools/build.ps1 建立 x64 Release，再執行 python tools/package.py。ZIP 檔名版本來自 `tools/package.py` 的 `HOST_VERSION`；輸出為本專案 `dist/DisplayHDR_Host_x64_v版本號.zip` 與 `SHA256SUMS.txt`。解壓後資料夾維持 `DisplayHDR_Host_x64`。
+開發端從 Host 原始碼執行 tools/build.ps1 建立 x64 Release，再執行 python tools/package.py。ZIP 檔名與 Host 服務共用 `tools/displayhdr_version.py` 的 `HOST_VERSION`；輸出為本專案 `dist/DisplayHDR_Host_x64_v版本號.zip` 與 `SHA256SUMS.txt`。解壓後資料夾維持 `DisplayHDR_Host_x64`。
 
 manifest.json 記錄包內各檔 SHA-256。保留 LICENSE-DisplayHDR.txt、runtime/LICENSE.txt 與官方 Python runtime 來源；勿刪除 runtime 或分開搬移必要資源。
 
