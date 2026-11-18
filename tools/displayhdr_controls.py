@@ -48,6 +48,15 @@ def legacy_hdr_info(display, path):
     if not output.monitor:
         raise ValueError('The active output did not identify a Windows monitor for HDR.')
 
+    version = sys.getwindowsversion()
+    if (version.major, version.minor) == (10, 0) and 19041 <= version.build <= 19045:
+        # Windows 10 has no Advanced Color for SDR displays. The caller still
+        # requires CCD capability and an enabled flag matching the DXGI mode.
+        kind = {0: 0, 12: 2}.get(output.colorSpace)
+        if kind is None:
+            raise ValueError('DXGI reported an unrecognized color space for Windows 10 HDR.')
+        return True, kind
+
     runtime = C.WinDLL('combase')
     pointer = C.c_void_p
     out_pointer = C.POINTER(pointer)

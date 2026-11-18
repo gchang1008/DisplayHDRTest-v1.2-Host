@@ -189,7 +189,7 @@ WMI 方法的回傳值依實際型別處理：布林 `True` 成功、`False` 失
 以下操作不需要 Input 配對，但都要求目前唯一啟用且身分可核對的輸出，不切換 Input、不修改 Windows 輸出配置、不控制圖樣或重啟 renderer。`get_display_controls` 是唯讀查詢，只接受 `version:1`、非空 `id`、`command`，回覆 `displayControls`：
 
 - `target`：`targetKey`、`monitorDevicePath`、`name`、`connection`、`internal`、`technology`（Windows connector technology 整數，11 表示 eDP）。內建識別依 Windows connector technology：LVDS、embedded DisplayPort、embedded UDI、Internal。
-- `hdr`：`supported`、`enabled`（true／false／null）、`error`。狀態直接讀 Windows；舊 advanced-color 介面無法區分 HDR／WCG 時回覆 null 並停用此工具的 HDR 控制，不把 advanced color 當成 HDR。
+- `hdr`：`supported`、`enabled`（true／false／null）、`error`。Windows 10 版本 2004 至 22H2 用顯示設定的能力旗標及同一輸出的 DXGI 色彩空間核對 HDR。其他版本的舊 advanced-color 介面無法區分 HDR／WCG 時，回覆 null 並停用 HDR 控制。
 - `brightness`：`supported`、`writable`、`method`（`windows`／`ddc`）、`minimum`、`maximum`、`current`、`percent`、`levels`、`error`。不可用值為 null，層級為空陣列；值表示設定比例，不是實測 cd/m²。讀取能力失敗保留錯誤，不假造成功或亮度值。
 
 `set_display_hdr` 接受共同欄位加 `allowInterrupt:true`、`targetKey`、`monitorDevicePath`、`enabled`（boolean）；`set_display_brightness` 以 `percent`（0–100 的整數）取代 enabled。兩者回覆 `action`，包含 `command`、目標身分、`changed` 及操作後的 `displayControls`。相同設定不重寫；寫入後讀回不符即報錯，不重送。同 id 的成功回覆可重取，但不得改內容；失敗／未知結果的同 id 不重新執行。

@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 import threading
+from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
@@ -37,6 +38,23 @@ class Color:
 
 
 class ControlsTests(unittest.TestCase):
+    def test_windows_10_legacy_hdr_requires_ccd_and_dxgi_to_agree(self):
+        self.native.legacy_hdr_reader = controls.legacy_hdr_info
+        self.color.legacy = True
+        version = SimpleNamespace(major=10, minor=0, build=19045)
+        with patch.object(sys, 'getwindowsversion', return_value=version), patch.object(
+                controls, 'dxgi_output', return_value=SimpleNamespace(monitor=1, colorSpace=12)) as output:
+            path = self.controller.query(2).paths[0]
+            self.color.enabled = True
+            self.assertEqual(self.native.hdr_state(path), {'supported': True, 'enabled': True, 'error': ''})
+            output.assert_called_once_with((0, 99), r'\\.\DISPLAY1')
+            self.color.enabled = False
+            self.assertFalse(self.native.hdr_state(path)['supported'])
+            output.return_value.colorSpace = 0
+            self.assertEqual(self.native.hdr_state(path), {'supported': True, 'enabled': False, 'error': ''})
+            output.return_value.colorSpace = 99
+            self.assertIsNone(self.native.hdr_state(path)['enabled'])
+
     def test_query_only_uses_vcp_hint_after_fresh_endpoint_identity_match(self):
         for hint, use in ((dict(self.target), True), ({**self.target, 'monitorDevicePath': 'other'}, False)):
             with self.subTest(hint=hint):
