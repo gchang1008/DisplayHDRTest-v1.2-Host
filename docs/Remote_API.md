@@ -184,6 +184,12 @@ WMI 方法的回傳值依實際型別處理：布林 `True` 成功、`False` 失
 
 原廠依據：[WmiGetMonitorRawEEdidV1Block](https://learn.microsoft.com/en-us/windows/win32/wmicoreprov/wmigetmonitorraweedidv1block-wmimonitordescriptormethods)、[Windows EDID 格式與 override](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/overriding-monitor-edids)。
 
+### 測試環境查詢
+
+`get_display_environment` 接受 `version:1`、非空 `id`、`command`、`targetKey`、`monitorDevicePath`。查詢前後核對指定的啟用輸出，操作為唯讀。
+
+成功回覆中的 `displayEnvironment` 包含原目標身分、`warnings` 及 `readElapsedMs`，以及可取得的 `gpuName`、`gpuDriverVersion`、`resolution`（桌面解析度）、`refreshRateHz`（設定更新率）、`osName`、`osBuild`、`biosVersion`、`colorDepthBpc`、`colorFormat`。GPU 依指定輸出的 Windows 裝置身分查詢。電腦資訊查詢上限為五秒，部分資料不可用時可回覆其他欄位。
+
 ### Other 顯示控制
 
 以下操作不需要 Input 配對，但都要求目前唯一啟用且身分可核對的輸出，不切換 Input、不修改 Windows 輸出配置、不控制圖樣或重啟 renderer。`get_display_controls` 是唯讀查詢，只接受 `version:1`、非空 `id`、`command`，回覆 `displayControls`：

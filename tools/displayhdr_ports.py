@@ -12,11 +12,13 @@ from displayhdr_hdr_control import HdrControl
 from displayhdr_monitor_input import InputIdentityError, probe_native, read_native, write_native
 from displayhdr_window_presentation import WindowPresentation
 from displayhdr_edid import read_edid
+from displayhdr_environment import read_environment
 from displayhdr_controls import COMMANDS as CONTROL_COMMANDS, INTERNAL, control_request
 
 
 COMMANDS = {"get_display_ports", "get_display_port_status", "set_display_output",
-            "write_display_input", "read_display_input", "enable_display_hdr", "present_display_window", "get_display_edid"} | CONTROL_COMMANDS
+            "write_display_input", "read_display_input", "enable_display_hdr", "present_display_window",
+            "get_display_edid", "get_display_environment"} | CONTROL_COMMANDS
 
 
 def edid_hash(device_path):
@@ -175,7 +177,8 @@ class DisplayPortService:
         query = command in ("get_display_ports", "get_display_port_status")
         expected = common | ({"switchMode"} if "switchMode" in request else set()) if query else common | {
             "allowInterrupt", "targetKey", "monitorDevicePath"}
-        if command in ("get_display_edid", "read_display_input"):
+        readonly = command in ("get_display_edid", "read_display_input", "get_display_environment")
+        if readonly:
             expected.remove("allowInterrupt")
         if command == "write_display_input":
             expected.add("value")
@@ -186,13 +189,12 @@ class DisplayPortService:
             raise ValueError("Unknown inventory mode.")
         if query:
             return self.inventory(mode) if command == "get_display_ports" else self.status()
-        if command not in ("get_display_edid", "read_display_input") and request["allowInterrupt"] is not True:
+        if not readonly and request["allowInterrupt"] is not True:
             raise ValueError("Explicit allowInterrupt=true is required.")
         if not all(isinstance(request[k], str) and request[k] for k in ("targetKey", "monitorDevicePath")):
             raise ValueError("A display endpoint and device identity are required.")
         if command == "write_display_input" and (type(request["value"]) is not int or not 1 <= request["value"] <= 255):
             raise ValueError("Invalid DDC/CI source value.")
-        readonly = command in ("get_display_edid", "read_display_input")
         with self.lock:
             identifier = request["id"]
             if identifier in self.replies:
@@ -213,13 +215,16 @@ class DisplayPortService:
                 if command == "set_display_output" and not self.renderer.restart_supported():
                     raise ValueError("Output selection requires a managed Host launcher.")
                 controller = self.controller_factory()
+                target, identity = request["targetKey"], request["monitorDevicePath"]
+                if command == "get_display_environment":
+                    return {"targetKey": target, "monitorDevicePath": identity,
+                            **read_environment(controller.api, target, identity)}
                 current = controller.inspect()
                 active = current["active"]["paths"]
                 if not active or not current.get("matchesDatabase"):
                     raise ValueError("Active output and matching Windows configuration are required.")
                 if command not in ("set_display_output", "read_display_input") and len(active) != 1:
                     raise ValueError("Exactly one active output is required for this operation.")
-                target, identity = request["targetKey"], request["monitorDevicePath"]
                 selected = next((p for p in controller.api.query(QDC_ALL_PATHS).paths
                                  if p.target.available and key(p.target) == target), None)
                 if selected is None or controller.api.device_path(selected) != identity:

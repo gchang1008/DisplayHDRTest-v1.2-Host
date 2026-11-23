@@ -13,6 +13,7 @@ from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "tools"))
 import displayhdr_display_paths as paths
+import displayhdr_environment as environment
 import displayhdr_ports as ports
 import displayhdr_server as server
 
@@ -345,6 +346,53 @@ class PathSelectionTests(unittest.TestCase):
 
 
 class PortHttpTests(unittest.TestCase):
+    def test_environment_reads_active_identity_without_renderer(self):
+        controller = Controller()
+        snapshot = controller.query(paths.QDC_ONLY_ACTIVE_PATHS)
+        path = snapshot.paths[0]
+        path.flags |= environment.PATH_SUPPORT_VIRTUAL_MODE
+        path.source.modeIndex = 0xffff  # Source mode index 0, no clone-group ID.
+        path.target.refresh = paths.Rational(60000, 1001)
+        mode = paths.Mode()
+        mode.type, mode.adapter = 1, path.source.adapter
+        mode.data.source.width, mode.data.source.height = 3840, 2160
+        snapshot.modes.append(mode)
+        controller.api.query = Mock(return_value=snapshot)
+        renderer = Mock()
+        instance = server.create_server("127.0.0.1", 0, 123)
+        instance.display_ports = ports.DisplayPortService(renderer, controller_factory=lambda: controller)
+        worker = threading.Thread(target=instance.serve_forever, kwargs={"poll_interval": .01})
+        worker.start()
+        try:
+            with patch.object(environment, "WindowsColorApi") as color, \
+                    patch.object(environment, "adapter_instance", return_value="gpu-instance"), \
+                    patch.object(environment, "read_system", return_value={"osName": "Windows", "warnings": []}) as system:
+                color.return_value.get.return_value = {"bitsPerColorChannel": 10, "colorEncoding": 2}
+                for identity, expected in (("monitor-1", 200), ("wrong-monitor", 400)):
+                    connection = http.client.HTTPConnection("127.0.0.1", instance.server_port, timeout=2)
+                    try:
+                        body = json.dumps({"version": 1, "id": identity, "command": "get_display_environment",
+                            "targetKey": "00000000:00000063/1", "monitorDevicePath": identity})
+                        connection.request("POST", "/api", body, {"Content-Type": "application/json"})
+                        response = connection.getresponse()
+                        self.assertEqual(response.status, expected)
+                        result = json.loads(response.read())
+                        if expected == 200:
+                            report = result["displayEnvironment"]
+                            self.assertEqual(report["resolution"], "3840x2160")
+                            self.assertAlmostEqual(report["refreshRateHz"], 59.94, places=2)
+                            self.assertEqual(report["colorDepthBpc"], 10)
+                            self.assertEqual(report["colorFormat"], "YCbCr 4:2:2")
+                            self.assertEqual(report["osName"], "Windows")
+                    finally:
+                        connection.close()
+                system.assert_called_once_with("gpu-instance")
+                self.assertFalse(renderer.mock_calls)
+        finally:
+            instance.shutdown()
+            instance.server_close()
+            worker.join(2)
+
     def test_hdr_identity_change_distinguishes_before_and_after_write_without_replay(self):
         for after_write in (False, True):
             with self.subTest(after_write=after_write):
