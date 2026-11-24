@@ -1,4 +1,4 @@
-"""Read complete, endpoint-specific EDID blocks without changing display settings."""
+"""Read available EDID blocks for one endpoint without changing display settings."""
 import base64
 import json
 import os
@@ -98,9 +98,7 @@ def wmi_edid(device_path, trace=None):
             if 'end' in row:
                 if row['end'] != len(blocks):
                     raise ValueError('Unexpected WMI EDID end block.')
-                data = b''.join(blocks)
-                expected = expected_length(data)
-                if expected is None or len(data) < expected:
+                if not blocks:
                     warnings.append('WMI EDID reading stopped: ' + str(row['reason']))
                 trace.append({**event, 'result': 'end', 'reason': str(row['reason'])[:1024]})
                 stopped = True
@@ -129,34 +127,16 @@ def wmi_edid(device_path, trace=None):
     return b''.join(blocks), warnings
 
 
-def expected_length(data):
-    if len(data) < 128:
-        return None
-    extensions = data[126]
-    if extensions and len(data) >= 256:
-        cta = data[128:256]
-        size = cta[4] & 31
-        if (cta[0] == 2 and cta[1] >= 3 and 7 <= cta[2] <= 127
-                and cta[4] >> 5 == 7 and size >= 2 and 5 + size <= cta[2]
-                and cta[5] == 0x78 and cta[6]):
-            extensions = cta[6]
-    return (extensions + 1) * 128
-
-
 def describe_edid(data, source, warnings=()):
     warnings = list(warnings)
-    expected = expected_length(data)
-    complete = expected is not None and len(data) == expected
     checksums = bool(data) and len(data) % 128 == 0 and all(
         sum(data[index:index + 128]) % 256 == 0 for index in range(0, len(data), 128))
-    if not complete:
-        warnings.append(f'EDID length differs from declaration: received {len(data)} bytes; expected {expected if expected is not None else "unknown"}.')
     if data[:8] != bytes.fromhex('00ffffffffffff00'):
         warnings.append('EDID base block header is missing or invalid.')
     if not checksums:
         warnings.append('EDID block checksum validation failed or blocks are incomplete.')
     return {'dataBase64': base64.b64encode(data).decode('ascii'), 'source': source,
-            'byteLength': len(data), 'expectedLength': expected, 'complete': complete,
+            'byteLength': len(data), 'expectedLength': None, 'complete': False,
             'checksumsValid': checksums, 'warnings': warnings}
 
 
@@ -172,19 +152,16 @@ def read_edid(device_path):
         trace.append({'stage': 'wmi', 'block': 0, 'result': 'error',
                       'elapsedMs': (time.perf_counter() - started) * 1000, 'reason': str(error)[:1024]})
     source = 'wmi' if data else 'unavailable'
-    if len(data) < (expected_length(data) or 128):
+    if not data:
         cached_started = time.perf_counter()
         try:
             cached = registry_edid(device_path)
-            if data and not cached.startswith(data):
-                warnings.append('Registry EDID differs from WMI; cached data was not substituted.')
-                outcome, reason = 'skipped', warnings[-1]
-            elif len(cached) > len(data):
+            if cached:
                 data, source = cached, 'registry'
                 warnings.append('Using Windows registry EDID fallback; this is cached driver data, not a fresh physical read.')
                 outcome, reason = 'used', warnings[-1]
             else:
-                outcome, reason = 'skipped', 'Registry EDID does not contain more bytes than WMI.'
+                outcome, reason = 'skipped', 'Registry EDID is empty.'
             trace.append({'stage': 'registry', 'result': outcome, 'byteLength': len(cached),
                           'elapsedMs': (time.perf_counter() - cached_started) * 1000, 'reason': reason})
         except (OSError, ValueError) as error:
@@ -193,7 +170,7 @@ def read_edid(device_path):
                           'elapsedMs': (time.perf_counter() - cached_started) * 1000, 'reason': str(error)[:1024]})
     else:
         trace.append({'stage': 'registry', 'result': 'skipped', 'elapsedMs': 0,
-                      'reason': 'WMI data already meets or exceeds the declared length.'})
+                      'reason': 'WMI returned EDID bytes.'})
     result = describe_edid(data, source, warnings)
     result.update(readTrace=trace, readElapsedMs=(time.perf_counter() - started) * 1000)
     return result

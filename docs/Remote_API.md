@@ -170,17 +170,17 @@ Host 保留本機互斥、底層有界逾時與同一請求 id 不重複執行�
 {"version":1,"id":"edid-1","command":"get_display_edid","targetKey":"adapter/target","monitorDevicePath":"device path"}
 ```
 
-成功回覆為 `{"version":1,"id":"edid-1","ok":true,"edid":{...}}`。`edid` 包含 `targetKey`、`monitorDevicePath`、`dataBase64`（原始 bytes 的 Base64）、`source`（`wmi`、`registry` 或 `unavailable`）、`byteLength`、`expectedLength`（無基礎區塊時為 null）、`complete`、`checksumsValid`、`warnings`（字串陣列）。`complete` 僅表示資料長度等於宣告的 `(extension count + 1) × 128`；第一個 CTA 延伸區塊（revision ≥ 3）的第一個 data block 若為有效、非零的 HF-EEODB（extended tag `0x78`），優先使用其延伸數，否則使用基礎區塊的延伸數。讀取與登錄備援的完整性判斷採相同規則；標頭或 checksum 錯誤另列警告，不修補資料。
+成功回覆為 `{"version":1,"id":"edid-1","ok":true,"edid":{...}}`。`edid` 包含 `targetKey`、`monitorDevicePath`、`dataBase64`（原始 bytes 的 Base64）、`source`（`wmi`、`registry` 或 `unavailable`）、`byteLength`、`checksumsValid`、`warnings`（字串陣列）。`byteLength` 是實際回傳長度；標頭或已讀資料的 checksum 錯誤列為警告。為保留舊版回覆格式，`expectedLength` 固定為 `null`，`complete` 固定為 `false`，表示本次未比對宣告長度。
 
-優先透過 Windows `WmiMonitorDescriptorMethods.WmiGetMonitorRawEEdidV1Block` 從區塊 0 逐一探測，最多讀取 256 個區塊（0–255，共 32768 bytes）；宣告長度僅用於檢查，不作為停止條件。方法失敗、失敗狀態或未初始化的 `BlockType:0` 表示當次無法再提供區塊；若尚未取得宣告長度則另列停止原因，已達宣告長度後的上述停止不額外視為錯誤。未知 block type 或非 128-byte 資料仍警告並停止；不跳過失敗區塊、不重送讀取。固定 PowerShell worker 上限 8 秒，逾時或達到 256 區塊上限時警告並保留已取得的連續區塊。超過宣告的資料照實保存、回報長度不符，不裁切、不因內容重複或全零而丟棄；`complete` 仍只表示長度符合宣告，不代表已證明實體資料結尾。
+優先透過 Windows `WmiMonitorDescriptorMethods.WmiGetMonitorRawEEdidV1Block` 從區塊 0 逐一探測，最多讀取 256 個區塊（0–255，共 32768 bytes）。方法失敗、失敗狀態或未初始化的 `BlockType:0` 表示當次無法再提供區塊，停止原因會留在記錄。未知 block type、非 128-byte 區塊、8 秒逾時或達到區塊上限會警告，已取得的連續區塊全數回傳，含全零尾端。
 
-少於宣告長度時可選用同一端點較長的登錄 EDID，回報 `source:registry` 及快取來源警告，不與 WMI 區塊拼接；登錄資料須完整保留已讀到的全部 WMI bytes 作為前綴才可替代。已達或超過宣告長度的 WMI 資料不由登錄資料替代。Windows 驅動提供的 EDID 可能包含快取或 override，不宣稱為直接向面板 EEPROM 即時讀取，也不代表顯示卡底層 DDC／AUX 交易紀錄。
+只有 WMI 未取得任何 bytes 才查同一端點的 Windows 登錄快取。有讀到快取時，回報原樣 bytes、`source:registry` 及快取來源警告。
 
 WMI 方法的回傳值依實際型別處理：布林 `True` 成功、`False` 失敗；整數保留 `0` 成功、非零失敗的相容性。空值或字串不視為成功，每一區塊仍須包含128 bytes，再核對完整長度與checksum；不因回傳成功而略過資料驗證。
 
-缺少區塊、checksum 錯誤或無法讀取均回覆 `ok:true`，保留實際原始內容並列出原因，由呼叫端顯示警告及決定測試策略。身分不符、讀取期間輸出改變、欄位錯誤或本機操作忙碌仍拒絕。資料保存與跨 Input 排程由呼叫端負責。
+Checksum 錯誤或無法讀取時回覆 `ok:true`，提供已取得的原始內容及原因。身分不符、讀取期間輸出改變、欄位錯誤或本機操作忙碌時會拒絕查詢。
 
-診斷欄位 `readElapsedMs` 是本次讀取含備援與檢查的總耗時（毫秒）；`readTrace` 是最多 260 筆、不含原始 EDID 內容的事件。每筆包含 `stage`（`wmi`／`registry`）、`result`（`read`／`end`／`error`／`timeout`／`limit`／`used`／`skipped`）及非負的 `elapsedMs`，依事件另含 `block`（0–256）、`byteLength`、`blockType`、`reason`（最多1024字元）。WMI 成功區塊的耗時由各次 CIM 呼叫計時；逾時／異常退出事件的耗時是整個 worker 經過時間。即使長度已符合宣告且沒有警告，也保留下一區塊的停止位置與原因；登錄備援是否使用、跳過或失敗亦記錄。診斷可由呼叫端與請求 id 關聯後保存；舊版 Host 未含這兩個欄位時，呼叫端可維持原有讀取功能。
+診斷欄位 `readElapsedMs` 是本次讀取含備援與檢查的總耗時（毫秒）；`readTrace` 是最多 260 筆、不含原始 EDID 內容的事件。每筆包含 `stage`（`wmi`／`registry`）、`result`（`read`／`end`／`error`／`timeout`／`limit`／`used`／`skipped`）及非負的 `elapsedMs`，依事件另含 `block`（0–256）、`byteLength`、`blockType`、`reason`（最多 1024 字元）。診斷會保留逐區塊讀取及停止原因，也會記錄快取使用、跳過或失敗的原因。
 
 原廠依據：[WmiGetMonitorRawEEdidV1Block](https://learn.microsoft.com/en-us/windows/win32/wmicoreprov/wmigetmonitorraweedidv1block-wmimonitordescriptormethods)、[Windows EDID 格式與 override](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/overriding-monitor-edids)。
 

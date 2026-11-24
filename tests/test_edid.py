@@ -72,13 +72,11 @@ class EdidReaderTests(unittest.TestCase):
         self.assertGreaterEqual(trace[-1]['elapsedMs'], 0)
         self.assertTrue(warnings)
 
-    def test_registry_trace_records_use_rejection_and_failure(self):
+    def test_registry_trace_records_use_empty_cache_and_failure(self):
         data = raw_edid(2)
-        different = bytearray(data)
-        different[130] = 1
-        for cached, outcome in ((data, 'used'), (bytes(different), 'skipped'), (OSError('cache failed'), 'error')):
+        for cached, outcome in ((data, 'used'), (b'', 'skipped'), (OSError('cache failed'), 'error')):
             with self.subTest(outcome=outcome), \
-                    patch.object(edid, 'wmi_edid', return_value=(data[:256], [])), \
+                    patch.object(edid, 'wmi_edid', return_value=(b'', [])), \
                     patch.object(edid, 'registry_edid', **({'side_effect': cached} if isinstance(cached, Exception)
                                                         else {'return_value': cached})):
                 result = edid.read_edid(IDENTITY)
@@ -103,97 +101,45 @@ class EdidReaderTests(unittest.TestCase):
             result = edid.read_edid(IDENTITY)
         registry.assert_not_called()
         self.assertEqual(base64.b64decode(result['dataBase64']), data)
-        self.assertEqual(result['expectedLength'], 128)
+        self.assertIsNone(result['expectedLength'])
         self.assertFalse(result['complete'])
         self.assertTrue(result['checksumsValid'])
-        self.assertIn('differs from declaration', result['warnings'][0])
+        self.assertEqual(result['warnings'], [])
 
-    def test_registry_cannot_replace_a_different_wmi_extension(self):
-        data = raw_edid(3)[:256]
-        cached = bytearray(raw_edid(3))
-        cached[130] = 1
-        with patch.object(edid, 'wmi_edid', return_value=(data, [])), \
-                patch.object(edid, 'registry_edid', return_value=bytes(cached)):
-            result = edid.read_edid(IDENTITY)
-        self.assertEqual(result['source'], 'wmi')
-        self.assertEqual(base64.b64decode(result['dataBase64']), data)
-        self.assertIn('differs from WMI', result['warnings'][0])
-
-    def test_override_count_detects_missing_blocks_and_complete_raw(self):
-        for count in (2, 5, 255):
-            data = override_edid(count)
-            for raw in (data[:256], data):
-                with self.subTest(count=count, length=len(raw)):
-                    result = edid.describe_edid(raw, 'wmi')
-                    self.assertEqual(result['expectedLength'], (count + 1) * 128)
-                    self.assertEqual(result['complete'], raw == data)
-                    self.assertTrue(result['checksumsValid'])
-                    self.assertEqual(base64.b64decode(result['dataBase64']), raw)
-                    self.assertEqual(bool(result['warnings']), raw != data)
-        self.assertEqual(edid.expected_length(override_edid(1, base_extensions=5)), 256)
-
-    def test_invalid_or_misplaced_override_does_not_replace_base_count(self):
-        for offset, value in ((126, 0), (128, 0x70), (129, 2), (130, 0), (130, 6),
-                              (130, 128), (132, 0x62), (132, 0xe1), (132, 0xe3),
-                              (133, 0x79), (134, 0)):
-            with self.subTest(offset=offset, value=value):
-                data = bytearray(override_edid())
-                data[offset] = value
-                self.assertEqual(edid.expected_length(data), (data[126] + 1) * 128)
-        data = bytearray(override_edid())
-        data[130] = 10
-        data[132:138] = bytes((0x42, 0, 0, 0xe2, 0x78, 2))
-        self.assertEqual(edid.expected_length(data), 256)
-        data = raw_edid(2)[:256] + override_edid()[128:256]
-        self.assertEqual(edid.expected_length(data), 384)
-        self.assertIsNone(edid.expected_length(bytes(127)))
-        self.assertEqual(edid.expected_length(override_edid()[:255]), 256)
+    def test_any_wmi_bytes_skip_longer_cache(self):
+        for full in (raw_edid(3), override_edid()):
+            with self.subTest(), patch.object(edid, 'wmi_edid', return_value=(full[:256], [])), \
+                    patch.object(edid, 'registry_edid', return_value=full) as registry:
+                result = edid.read_edid(IDENTITY)
+            registry.assert_not_called()
+            self.assertEqual(result['source'], 'wmi')
+            self.assertEqual(base64.b64decode(result['dataBase64']), full[:256])
+            self.assertEqual(result['warnings'], [])
 
     def test_override_checksum_failure_remains_a_separate_warning(self):
         data = bytearray(override_edid())
         data[255] ^= 1
         result = edid.describe_edid(data, 'wmi')
-        self.assertEqual(result['expectedLength'], 384)
-        self.assertTrue(result['complete'])
         self.assertFalse(result['checksumsValid'])
-
-    def test_override_incomplete_wmi_can_use_longer_matching_cache(self):
-        data = override_edid()
-        with patch.object(edid, 'wmi_edid', return_value=(data[:256], ['Block 2 failed.'])), \
-                patch.object(edid, 'registry_edid', return_value=data) as registry:
-            result = edid.read_edid(IDENTITY)
-        registry.assert_called_once_with(IDENTITY)
-        self.assertEqual(result['source'], 'registry')
-        self.assertTrue(result['complete'])
-        self.assertEqual(result['expectedLength'], 384)
-        self.assertIn('cached driver data', result['warnings'][-1])
-        with patch.object(edid, 'wmi_edid', return_value=(data[:256], [])), \
-                patch.object(edid, 'registry_edid', return_value=data[:256]):
-            result = edid.read_edid(IDENTITY)
-        self.assertFalse(result['complete'])
-        self.assertEqual(result['source'], 'wmi')
-        self.assertEqual(result['byteLength'], 256)
+        self.assertIn('checksum', result['warnings'][0])
 
     def test_three_blocks_and_larger_edid_are_not_truncated(self):
         for count in (0, 1, 2, 5, 255):
             data = raw_edid(count)
             result = edid.describe_edid(data, 'wmi')
-            self.assertTrue(result['complete'])
             self.assertTrue(result['checksumsValid'])
-            self.assertEqual(result['expectedLength'], len(data))
+            self.assertEqual(result['byteLength'], len(data))
             self.assertEqual(base64.b64decode(result['dataBase64']), data)
             self.assertEqual(result['warnings'], [])
 
     def test_incomplete_and_checksum_error_are_preserved(self):
         truncated = raw_edid(2)[:256]
         result = edid.describe_edid(truncated, 'wmi')
-        self.assertFalse(result['complete'])
-        self.assertEqual(result['expectedLength'], 384)
+        self.assertEqual(result['warnings'], [])
         self.assertEqual(base64.b64decode(result['dataBase64']), truncated)
         damaged = bytearray(raw_edid(2))
         damaged[130] = 1
         result = edid.describe_edid(bytes(damaged), 'wmi')
-        self.assertTrue(result['complete'])
         self.assertFalse(result['checksumsValid'])
         self.assertTrue(result['warnings'])
 
@@ -241,39 +187,27 @@ class EdidReaderTests(unittest.TestCase):
 
     def test_fallback_uses_whole_registry_data_and_labels_cache(self):
         data = raw_edid(2)
-        with patch.object(edid, 'wmi_edid', return_value=(data[:256], ['Block 2 failed.'])), \
+        with patch.object(edid, 'wmi_edid', return_value=(b'', ['Block 0 failed.'])), \
                 patch.object(edid, 'registry_edid', return_value=data):
             result = edid.read_edid(IDENTITY)
         self.assertEqual(result['source'], 'registry')
-        self.assertTrue(result['complete'])
         self.assertEqual(base64.b64decode(result['dataBase64']), data)
         self.assertIn('cached driver data', result['warnings'][-1])
 
-    def test_read_failure_is_warning_and_partial_wmi_is_not_overwritten_by_shorter_cache(self):
+    def test_read_failure_after_some_wmi_blocks_keeps_bytes_and_warning(self):
         data = raw_edid(2)[:256]
         with patch.object(edid, 'wmi_edid', return_value=(data, ['Block 2 failed.'])), \
                 patch.object(edid, 'registry_edid', return_value=data[:128]):
             result = edid.read_edid(IDENTITY)
         self.assertEqual(result['source'], 'wmi')
         self.assertEqual(result['byteLength'], 256)
-        self.assertFalse(result['complete'])
+        self.assertIn('Block 2 failed.', result['warnings'])
         with patch.object(edid, 'wmi_edid', side_effect=OSError('unavailable')), \
                 patch.object(edid, 'registry_edid', side_effect=OSError('not found')):
             result = edid.read_edid(IDENTITY)
         self.assertEqual(result['source'], 'unavailable')
         self.assertEqual(result['dataBase64'], '')
         self.assertTrue(result['warnings'])
-
-    def test_different_cached_base_cannot_replace_current_wmi_data(self):
-        data = raw_edid(2)[:256]
-        cached = bytearray(raw_edid(2))
-        cached[12] = 1
-        with patch.object(edid, 'wmi_edid', return_value=(data, [])), \
-                patch.object(edid, 'registry_edid', return_value=bytes(cached)):
-            result = edid.read_edid(IDENTITY)
-        self.assertEqual(result['source'], 'wmi')
-        self.assertEqual(base64.b64decode(result['dataBase64']), data)
-        self.assertIn('differs from WMI', result['warnings'][0])
 
 
 class EdidWmiScriptTests(unittest.TestCase):
@@ -329,16 +263,14 @@ function Invoke-CimMethod {
                                             [raw[i:i + 128] for i in range(0, 512, 128)])
             self.assertEqual(data, raw)
             self.assertEqual(warnings, [])
-            self.assertIn('differs from declaration', edid.describe_edid(data, 'wmi')['warnings'][0])
+            self.assertEqual(edid.describe_edid(data, 'wmi')['warnings'], [])
 
     def test_uninitialized_type_stops_without_appending_returned_bytes(self):
         for declared in (0, 2):
             blocks = [raw_edid(declared)[:128], bytes(128), bytes(128)]
             data, warnings = self.run_script(['$true'] * 3, blocks, [1, 0, 255])
             self.assertEqual(data, blocks[0])
-            self.assertEqual(bool(warnings), declared != 0)
-            if warnings:
-                self.assertIn('block type 0', warnings[0])
+            self.assertEqual(warnings, [])
 
     def test_invalid_type_or_length_after_declared_end_is_still_a_warning(self):
         blocks = [raw_edid(0), bytes(128)]
@@ -370,16 +302,18 @@ function Invoke-CimMethod {
         self.assertEqual(data, raw_edid(0))
         self.assertEqual(warnings, [])
 
-    def test_method_exception_before_declared_end_reports_reason(self):
-        data, warnings = self.run_script(['$true'], [raw_edid(2)[:128]])
+    def test_method_exception_after_first_block_is_recorded_in_trace(self):
+        trace = []
+        data, warnings = self.run_script(['$true'], [raw_edid(2)[:128]], trace=trace)
         self.assertEqual(data, raw_edid(2)[:128])
-        self.assertIn('No more EDID blocks', warnings[0])
+        self.assertEqual(warnings, [])
+        self.assertIn('No more EDID blocks', trace[-1]['reason'])
 
     def test_boolean_success_reads_all_declared_blocks(self):
         data, warnings = self.run_script(['$true'] * 3)
         self.assertEqual(data, raw_edid(2))
         self.assertEqual(warnings, [])
-        self.assertTrue(edid.describe_edid(data, 'wmi')['complete'])
+        self.assertTrue(edid.describe_edid(data, 'wmi')['checksumsValid'])
 
     def test_override_does_not_limit_available_block_reading(self):
         for count, base in ((2, 1), (5, 1), (1, 5)):
@@ -390,15 +324,12 @@ function Invoke-CimMethod {
                 self.assertEqual(data, raw)
                 self.assertEqual(warnings, [])
 
-    def test_override_missing_third_block_preserves_two_and_warns(self):
+    def test_override_does_not_trigger_length_warning(self):
         raw = override_edid()
         blocks = [raw[i:i + 128] for i in range(0, len(raw), 128)]
         data, warnings = self.run_script(['$true', '$true', '$false'], blocks)
         self.assertEqual(data, raw[:256])
-        self.assertIn('block 2 returned WMI status', warnings[0])
-        result = edid.describe_edid(data, 'wmi', warnings)
-        self.assertFalse(result['complete'])
-        self.assertEqual(result['expectedLength'], 384)
+        self.assertEqual(edid.describe_edid(data, 'wmi', warnings)['warnings'], [])
 
     def test_malformed_override_does_not_prevent_probing_to_api_end(self):
         for offset, value in ((128, 0x70), (129, 2), (130, 6), (130, 128),
@@ -428,7 +359,7 @@ function Invoke-CimMethod {
     def test_failed_later_block_preserves_previous_raw_bytes(self):
         data, warnings = self.run_script(['$true', '$false', '$true'])
         self.assertEqual(data, raw_edid(2)[:128])
-        self.assertIn('block 1 returned WMI status', warnings[0])
+        self.assertEqual(warnings, [])
 
     def test_success_status_does_not_accept_wrong_block_length(self):
         data, warnings = self.run_script(['$true'] * 3, [raw_edid(2)[:128], bytes(64), bytes(128)])
