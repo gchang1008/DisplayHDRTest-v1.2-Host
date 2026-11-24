@@ -188,7 +188,7 @@ WMI 方法的回傳值依實際型別處理：布林 `True` 成功、`False` 失
 
 `get_display_environment` 接受 `version:1`、非空 `id`、`command`、`targetKey`、`monitorDevicePath`。查詢前後核對指定的啟用輸出，操作為唯讀。
 
-成功回覆中的 `displayEnvironment` 包含原目標身分、`warnings` 及 `readElapsedMs`，以及可取得的 `gpuName`、`gpuDriverVersion`、`resolution`（桌面解析度）、`refreshRateHz`（設定更新率）、`osName`、`osBuild`、`biosVersion`、`colorDepthBpc`、`colorFormat`。GPU 依指定輸出的 Windows 裝置身分查詢。電腦資訊查詢上限為五秒，部分資料不可用時可回覆其他欄位。
+成功回覆中的 `displayEnvironment` 包含原目標身分、`warnings` 及 `readElapsedMs`，以及可取得的 `gpuName`、`gpuDriverVersion`、`resolution`（桌面解析度）、`refreshRateHz`（設定更新率）、`osName`、`osVersion`、`osBuild`、`biosVersion`、`colorDepthBpc`、`colorFormat`。Windows 10／11 的 `osName` 依 SKU 輸出英文版別，例如 `Windows 11 Home`。 `osVersion` 使用 Windows 的 `DisplayVersion`，例如 `22H2`，缺值時回傳 `null`。`osBuild` 包含可取得的更新修訂號。GPU 依指定輸出的 Windows 裝置身分查詢。電腦資訊查詢上限為五秒，部分資料不可用時可回覆其他欄位。
 
 ### Other 顯示控制
 

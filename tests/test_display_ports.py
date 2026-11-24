@@ -346,6 +346,32 @@ class PathSelectionTests(unittest.TestCase):
 
 
 class PortHttpTests(unittest.TestCase):
+    def test_windows_release_uses_sku_and_independent_registry_values(self):
+        cases = (
+            ("22621", 101, 1, "22H2", 2861, "Windows 11 Home", "22621.2861"),
+            ("19045", 48, 1, None, 6093, "Windows 10 Pro", "19045.6093"),
+            ("26100", 100, 1, "24H2", None, "Windows 11 Home Single Language", "26100"),
+            ("26100", 999, 1, "24H2", None, None, "26100"),
+            ("26100", 7, 3, "24H2", None, None, "26100"),
+        )
+        for build, sku, product_type, version, revision, name, output_build in cases:
+            with self.subTest(build=build, sku=sku):
+                entries = {"CurrentBuildNumber": build, "DisplayVersion": version, "UBR": revision}
+
+                def read_value(_, key):
+                    if entries[key] is None:
+                        raise FileNotFoundError(key)
+                    return entries[key], 0
+
+                result = {"osBuild": build, "osSku": sku, "osProductType": product_type, "warnings": []}
+                with patch.object(environment.winreg, "OpenKey"), \
+                        patch.object(environment.winreg, "QueryValueEx", side_effect=read_value):
+                    environment.read_windows_release(result)
+                self.assertEqual(result.get("osName"), name)
+                self.assertEqual(result.get("osVersion"), version)
+                self.assertEqual(result["osBuild"], output_build)
+                self.assertEqual(bool(result["warnings"]), name is None or version is None)
+
     def test_environment_reads_active_identity_without_renderer(self):
         controller = Controller()
         snapshot = controller.query(paths.QDC_ONLY_ACTIVE_PATHS)
@@ -366,7 +392,9 @@ class PortHttpTests(unittest.TestCase):
         try:
             with patch.object(environment, "WindowsColorApi") as color, \
                     patch.object(environment, "adapter_instance", return_value="gpu-instance"), \
-                    patch.object(environment, "read_system", return_value={"osName": "Windows", "warnings": []}) as system:
+                    patch.object(environment, "read_system", return_value={
+                        "osName": "Windows 11 Home", "osVersion": "22H2", "osBuild": "22621.2861",
+                        "warnings": []}) as system:
                 color.return_value.get.return_value = {"bitsPerColorChannel": 10, "colorEncoding": 2}
                 for identity, expected in (("monitor-1", 200), ("wrong-monitor", 400)):
                     connection = http.client.HTTPConnection("127.0.0.1", instance.server_port, timeout=2)
@@ -383,7 +411,8 @@ class PortHttpTests(unittest.TestCase):
                             self.assertAlmostEqual(report["refreshRateHz"], 59.94, places=2)
                             self.assertEqual(report["colorDepthBpc"], 10)
                             self.assertEqual(report["colorFormat"], "YCbCr 4:2:2")
-                            self.assertEqual(report["osName"], "Windows")
+                            self.assertEqual((report["osName"], report["osVersion"], report["osBuild"]),
+                                             ("Windows 11 Home", "22H2", "22621.2861"))
                     finally:
                         connection.close()
                 system.assert_called_once_with("gpu-instance")

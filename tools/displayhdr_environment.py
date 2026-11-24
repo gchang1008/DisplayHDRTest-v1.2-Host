@@ -18,6 +18,19 @@ VIRTUAL_MODE_AWARE = 0x10
 VIRTUAL_REFRESH_RATE_AWARE = 0x40
 PATH_SUPPORT_VIRTUAL_MODE = 0x08
 PATH_ACTIVE = 0x01
+# Win32_OperatingSystem.OperatingSystemSKU uses the PRODUCT_* values from winnt.h.
+WINDOWS_EDITIONS = {
+    4: "Enterprise", 27: "Enterprise N", 48: "Pro", 49: "Pro N",
+    72: "Enterprise Evaluation", 84: "Enterprise N Evaluation", 98: "Home N",
+    99: "Home China", 100: "Home Single Language", 101: "Home",
+    121: "Education", 122: "Education N", 125: "Enterprise LTSC",
+    126: "Enterprise LTSC N", 129: "Enterprise LTSC Evaluation",
+    130: "Enterprise LTSC N Evaluation", 138: "Pro Single Language",
+    161: "Pro for Workstations", 162: "Pro N for Workstations",
+    164: "Pro Education", 165: "Pro Education N", 171: "Enterprise G",
+    172: "Enterprise G N", 175: "Enterprise multi-session", 188: "IoT Enterprise",
+    191: "IoT Enterprise LTSC", 202: "SE N", 203: "SE",
+}
 
 SYSTEM_QUERY = r"""
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
@@ -33,7 +46,8 @@ if ($env:DISPLAYHDR_ADAPTER_INSTANCE) {
 }
 try {
     $os = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop
-    $result.osName = $os.Caption
+    $result.osSku = $os.OperatingSystemSKU
+    $result.osProductType = $os.ProductType
     $result.osBuild = $os.BuildNumber
 } catch { $result.warnings += 'OS details: ' + $_.Exception.Message }
 try {
@@ -100,17 +114,45 @@ def read_system(instance):
         env={**os.environ, "DISPLAYHDR_ADAPTER_INSTANCE": instance},
         capture_output=True, check=True, timeout=5, creationflags=subprocess.CREATE_NO_WINDOW)
     result = json.loads(output.stdout.decode("utf-8-sig"))
-    if result.get("osBuild"):
-        try:
-            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
-                                r"SOFTWARE\Microsoft\Windows NT\CurrentVersion") as registry:
-                build, _ = winreg.QueryValueEx(registry, "CurrentBuildNumber")
-                revision, _ = winreg.QueryValueEx(registry, "UBR")
-            if build == result["osBuild"] and type(revision) is int and revision >= 0:
-                result["osBuild"] += f".{revision}"
-        except OSError:
-            pass
+    read_windows_release(result)
     return result
+
+
+def read_windows_release(result):
+    build = result.get("osBuild")
+    sku = result.pop("osSku", None)
+    product_type = result.pop("osProductType", None)
+    if not isinstance(build, str) or not build.isdecimal():
+        return
+    edition = WINDOWS_EDITIONS.get(sku)
+    if product_type == 1 and int(build) >= 10240 and edition:
+        generation = 11 if int(build) >= 22000 else 10
+        result["osName"] = f"Windows {generation} {edition}"
+    else:
+        result["warnings"].append(f"English Windows edition unavailable (SKU {sku}, product type {product_type}).")
+
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                            r"SOFTWARE\Microsoft\Windows NT\CurrentVersion") as registry:
+            if winreg.QueryValueEx(registry, "CurrentBuildNumber")[0] != build:
+                result["warnings"].append("Windows registry build differs from the running OS build.")
+                return
+            try:
+                version, _ = winreg.QueryValueEx(registry, "DisplayVersion")
+                if isinstance(version, str) and version.strip():
+                    result["osVersion"] = version.strip()
+                else:
+                    result["warnings"].append("Windows DisplayVersion is empty or invalid.")
+            except OSError:
+                result["warnings"].append("Windows DisplayVersion is unavailable.")
+            try:
+                revision, _ = winreg.QueryValueEx(registry, "UBR")
+                if type(revision) is int and revision >= 0:
+                    result["osBuild"] = f"{build}.{revision}"
+            except OSError:
+                pass
+    except OSError:
+        result["warnings"].append("Windows release information is unavailable in the registry.")
 
 
 def active_path(api, target, identity):
@@ -149,7 +191,7 @@ def read_environment(api, target, identity):
     started = time.monotonic()
     snapshot, path, flags = active_path(api, target, identity)
     resolution, rate = display_mode(snapshot, path, flags)
-    result = {"resolution": resolution, "refreshRateHz": rate}
+    result = {"resolution": resolution, "refreshRateHz": rate, "osVersion": None}
     warnings = []
     try:
         color = WindowsColorApi().get(path)
@@ -165,7 +207,7 @@ def read_environment(api, target, identity):
     try:
         system = read_system(instance)
         warnings.extend(system.get("warnings", []))
-        for field in ("gpuName", "gpuDriverVersion", "osName", "osBuild", "biosVersion"):
+        for field in ("gpuName", "gpuDriverVersion", "osName", "osVersion", "osBuild", "biosVersion"):
             value = system.get(field)
             if isinstance(value, str) and value.strip():
                 result[field] = value.strip()[:512]
