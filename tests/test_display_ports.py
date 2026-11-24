@@ -384,6 +384,22 @@ class PortHttpTests(unittest.TestCase):
         mode.data.source.width, mode.data.source.height = 3840, 2160
         snapshot.modes.append(mode)
         controller.api.query = Mock(return_value=snapshot)
+
+        def source_name(packet):
+            source = C.cast(packet, C.POINTER(environment.SourceName)).contents
+            self.assertEqual((source.header.type, source.header.adapter.low, source.header.id), (1, 99, 0))
+            source.device = "Test GPU output"
+            return 0
+
+        def display_settings(device, index, packet):
+            mode = C.cast(packet, C.POINTER(environment.DisplaySettings)).contents
+            self.assertEqual((device, index, mode.size), ("Test GPU output", -1, 220))
+            mode.fields = environment.DM_DISPLAYFREQUENCY
+            mode.frequency = 60
+            return 1
+
+        controller.api.dll.DisplayConfigGetDeviceInfo = source_name
+        controller.api.dll.EnumDisplaySettingsW = display_settings
         renderer = Mock()
         instance = server.create_server("127.0.0.1", 0, 123)
         instance.display_ports = ports.DisplayPortService(renderer, controller_factory=lambda: controller)
@@ -392,6 +408,7 @@ class PortHttpTests(unittest.TestCase):
         try:
             with patch.object(environment, "WindowsColorApi") as color, \
                     patch.object(environment, "adapter_instance", return_value="gpu-instance"), \
+                    patch.object(environment, "raw_luminance", return_value=408.5) as luminance, \
                     patch.object(environment, "read_system", return_value={
                         "osName": "Windows 11 Home", "osVersion": "22H2", "osBuild": "22621.2861",
                         "warnings": []}) as system:
@@ -408,7 +425,8 @@ class PortHttpTests(unittest.TestCase):
                         if expected == 200:
                             report = result["displayEnvironment"]
                             self.assertEqual(report["resolution"], "3840x2160")
-                            self.assertAlmostEqual(report["refreshRateHz"], 59.94, places=2)
+                            self.assertEqual(report["refreshRateHz"], 60)
+                            self.assertEqual(report["peakLuminanceNits"], 408.5)
                             self.assertEqual(report["colorDepthBpc"], 10)
                             self.assertEqual(report["colorFormat"], "YCbCr 4:2:2")
                             self.assertEqual((report["osName"], report["osVersion"], report["osBuild"]),
@@ -416,6 +434,7 @@ class PortHttpTests(unittest.TestCase):
                     finally:
                         connection.close()
                 system.assert_called_once_with("gpu-instance")
+                luminance.assert_called_once_with("monitor-1")
                 self.assertFalse(renderer.mock_calls)
         finally:
             instance.shutdown()

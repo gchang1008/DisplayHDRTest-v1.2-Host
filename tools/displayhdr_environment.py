@@ -2,6 +2,7 @@
 
 import ctypes as C
 import json
+import math
 import os
 from pathlib import Path
 import subprocess
@@ -9,7 +10,9 @@ import time
 import winreg
 
 from displayhdr_display_paths import Header, I32, U32, QDC_ONLY_ACTIVE_PATHS, key
+from displayhdr_factor import raw_luminance
 from displayhdr_hdr_control import WindowsColorApi
+from displayhdr_monitor_input import SourceName
 
 
 COLOR_FORMATS = {0: "RGB", 1: "YCbCr 4:4:4", 2: "YCbCr 4:2:2", 3: "YCbCr 4:2:0",
@@ -18,6 +21,8 @@ VIRTUAL_MODE_AWARE = 0x10
 VIRTUAL_REFRESH_RATE_AWARE = 0x40
 PATH_SUPPORT_VIRTUAL_MODE = 0x08
 PATH_ACTIVE = 0x01
+ENUM_CURRENT_SETTINGS = -1
+DM_DISPLAYFREQUENCY = 0x00400000
 # Win32_OperatingSystem.OperatingSystemSKU uses the PRODUCT_* values from winnt.h.
 WINDOWS_EDITIONS = {
     4: "Enterprise", 27: "Enterprise N", 48: "Pro", 49: "Pro N",
@@ -59,6 +64,13 @@ ConvertTo-Json -InputObject $result -Compress
 
 class AdapterName(C.Structure):
     _fields_ = [("header", Header), ("devicePath", C.c_wchar * 128)]
+
+
+class DisplaySettings(C.Structure):
+    # DEVMODEW layout from wingdi.h. Only dmSize, dmFields and dmDisplayFrequency are used.
+    _fields_ = [("_version", C.c_byte * 68), ("size", C.c_uint16), ("_driverExtra", C.c_uint16),
+                ("fields", U32), ("_mode", C.c_byte * 108), ("frequency", U32),
+                ("_reserved", C.c_byte * 32)]
 
 
 class DeviceInfo(C.Structure):
@@ -171,28 +183,46 @@ def active_path(api, target, identity):
     return snapshot, matches[0], flags
 
 
-def display_mode(snapshot, path, flags):
+def desktop_resolution(snapshot, path, flags):
     index = path.source.modeIndex
     if flags & VIRTUAL_MODE_AWARE and path.flags & PATH_SUPPORT_VIRTUAL_MODE:
         index >>= 16
-    resolution = None
     if index < len(snapshot.modes):
         mode = snapshot.modes[index]
         if mode.type == 1 and key(mode) == key(path.source):
             source = mode.data.source
             if source.width and source.height:
-                resolution = f"{source.width}x{source.height}"
-    refresh = path.target.refresh
-    rate = refresh.numerator / refresh.denominator if refresh.numerator and refresh.denominator else None
-    return resolution, rate
+                return f"{source.width}x{source.height}"
+    return None
+
+
+def current_refresh_rate(api, path):
+    source = SourceName()
+    source.header = Header(1, C.sizeof(source), path.source.adapter, path.source.id)
+    api.check(api.dll.DisplayConfigGetDeviceInfo(C.byref(source.header)))
+    if not source.device:
+        raise ValueError("No Windows device name for the active display source.")
+    mode = DisplaySettings()
+    mode.size = C.sizeof(mode)
+    enum_settings = api.dll.EnumDisplaySettingsW
+    enum_settings.argtypes, enum_settings.restype = [C.c_wchar_p, I32, C.POINTER(DisplaySettings)], I32
+    if not enum_settings(source.device, ENUM_CURRENT_SETTINGS, C.byref(mode)):
+        raise OSError("EnumDisplaySettingsW could not read the active display mode.")
+    if not mode.fields & DM_DISPLAYFREQUENCY or mode.frequency <= 1:
+        raise ValueError("The active display mode did not report a refresh rate in Hz.")
+    return mode.frequency
 
 
 def read_environment(api, target, identity):
     started = time.monotonic()
     snapshot, path, flags = active_path(api, target, identity)
-    resolution, rate = display_mode(snapshot, path, flags)
-    result = {"resolution": resolution, "refreshRateHz": rate, "osVersion": None}
+    result = {"resolution": desktop_resolution(snapshot, path, flags), "refreshRateHz": None,
+              "peakLuminanceNits": None, "osVersion": None}
     warnings = []
+    try:
+        result["refreshRateHz"] = current_refresh_rate(api, path)
+    except (OSError, ValueError) as error:
+        warnings.append(f"Display refresh rate: {error}")
     try:
         color = WindowsColorApi().get(path)
         result["colorDepthBpc"] = color["bitsPerColorChannel"] or None
@@ -213,6 +243,13 @@ def read_environment(api, target, identity):
                 result[field] = value.strip()[:512]
     except (OSError, subprocess.SubprocessError, ValueError) as error:
         warnings.append(f"Computer details: {error}")
+    try:
+        peak = raw_luminance(identity)
+        if type(peak) not in (int, float) or not math.isfinite(peak) or peak <= 0:
+            raise ValueError("DisplayMonitor did not report a positive peak luminance.")
+        result["peakLuminanceNits"] = peak
+    except (OSError, RuntimeError, subprocess.SubprocessError, ValueError) as error:
+        warnings.append(f"Display peak luminance: {error}")
     active_path(api, target, identity)
     return {**result, "warnings": [w[:512] for w in warnings],
             "readElapsedMs": round((time.monotonic() - started) * 1000, 3)}
